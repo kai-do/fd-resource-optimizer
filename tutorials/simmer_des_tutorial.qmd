@@ -1,0 +1,634 @@
+---
+title: "Discrete event simulation with simmer"
+subtitle: "Modeling fire apparatus response, using dummy data"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+    code-tools: true
+execute:
+  warning: false
+  message: false
+---
+
+## What you'll build
+
+By the end you'll have a simulation of a small fire district: calls come in across six response zones, the dispatcher sends the closest idle unit, and the units go out, work the call and return to quarters. You'll measure response times, unit utilization and first-due reliability, then test a what-if: *does adding a second unit at the busiest station help, and by how much?*
+
+We get there in four steps:
+
+1. **One engine, one station.** Learn the core simmer vocabulary and check the simulation against a known formula.
+2. **Replications.** Why one simulation run is never enough.
+3. **A dispatch area.** Several stations, zones, a travel-time matrix, time-of-day demand and closest-available dispatch.
+4. **Scenarios.** Compare configurations fairly.
+
+All data is made up. @sec-real-data sketches how to swap in this repo's real travel matrices.
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(simmer)  # load after tidyverse, see below
+
+theme_set(theme_minimal(base_size = 12))
+```
+
+::: callout-warning
+## Name clashes with the tidyverse
+
+simmer exports `select()`, `now()` and `separate()`, and so do dplyr, lubridate and tidyr. Whichever package is loaded **last** wins. Loading simmer second means `select()` and `now()` inside trajectories do what simmer intends. The catch is that selecting data-frame columns then needs `dplyr::select()`.
+
+Load them the other way round and you get confusing errors. One is *"no applicable method for 'select' applied to an object of class trajectory"*. Another is lubridate's `now()` complaining that it expected a time-zone string when you passed it the simulation environment.
+:::
+
+## Discrete event simulation in five ideas
+
+A discrete event simulation (DES) models a system as a sequence of **events**: a call arrives, a unit goes en route, a unit clears. Nothing happens between events, so the simulation clock jumps straight from one event to the next instead of ticking every second. That's why simulating a year of calls takes under a second.
+
+| DES concept | simmer term | In our model |
+|---|---|---|
+| Things that flow through the system | **arrivals** | 911 calls |
+| What an arrival does, step by step | **trajectory** | dispatch → turnout → travel → on scene → return |
+| Limited things arrivals compete for | **resources** | apparatus (an engine company) |
+| Where arrivals wait for a busy resource | **queue** | calls holding for a unit |
+| What creates arrivals | **source** (generator or data frame) | the call stream |
+
+A resource has a **capacity** (how many units it has) and a **queue**. When a call tries to `seize()` a resource with no free capacity, it waits in the queue until another call `release()`s it.
+
+## Model 1: one engine, one station
+
+Start with the smallest model that's still useful: one station with one engine.
+
+- Calls arrive at random, on average one every 3 hours. "At random" means a Poisson process, so the time between calls is exponentially distributed.
+- Each call keeps the engine busy for 45 minutes on average, covering turnout, travel, on scene and return. For now that time is also exponential, which lets us check the answer against textbook queueing theory.
+
+All times in this tutorial are in **minutes**. simmer doesn't know about units; it just advances a number. Pick one unit and stick with it.
+
+### The trajectory
+
+A trajectory is a recipe each call follows:
+
+```{r}
+#| label: m1-trajectory
+call_m1 <- trajectory("call") %>%
+  seize("engine", 1) %>%                         # wait for the engine, then take it
+  timeout(function() rexp(1, rate = 1 / 45)) %>% # busy for ~45 min
+  release("engine", 1)                           # put it back in service
+
+call_m1
+```
+
+### The environment
+
+The environment holds the clock, the resources and the sources of arrivals. Then `run()` advances the clock until a time limit or until nothing is left to do.
+
+```{r}
+#| label: m1-run
+set.seed(42)
+
+one_year <- 365 * 24 * 60
+
+env_m1 <- simmer("one engine") %>%
+  add_resource("engine", capacity = 1) %>%
+  add_generator("call", call_m1, distribution = function() rexp(1, rate = 1 / 180)) %>%
+  run(until = one_year)
+
+env_m1
+```
+
+### Reading the results
+
+simmer records everything as it runs. `get_mon_arrivals()` returns one row per finished call:
+
+```{r}
+#| label: m1-arrivals
+arrivals_m1 <- get_mon_arrivals(env_m1)
+head(arrivals_m1)
+```
+
+- `start_time`: when the call came in.
+- `end_time`: when the engine cleared and went back in service.
+- `activity_time`: time spent in `timeout()` steps, which here is the time the engine was working the call.
+
+What's left over is time spent **waiting in the queue**: the call was received, but the engine was busy elsewhere.
+
+```{r}
+#| label: m1-wait
+arrivals_m1 <- arrivals_m1 %>%
+  mutate(wait = end_time - start_time - activity_time)
+
+arrivals_m1 %>%
+  summarise(
+    calls       = n(),
+    pct_waited  = mean(wait > 0.001),
+    mean_wait   = mean(wait),
+    p90_wait    = quantile(wait, 0.9)
+  )
+```
+
+`get_mon_resources()` records the resource's state every time it changes. It's useful for plotting what the station looked like over time:
+
+```{r}
+#| label: m1-resource-plot
+#| fig-height: 3
+get_mon_resources(env_m1) %>%
+  filter(time < 3 * 24 * 60) %>%
+  ggplot(aes(time / 60, server + queue)) +
+  geom_step() +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey50") +
+  labs(x = "Hour", y = "Calls in system",
+       title = "First three days",
+       subtitle = "Above the dashed line, a call is holding for the engine")
+```
+
+### Check the simulation against theory
+
+With exponential arrivals and exponential service times, one server is the textbook **M/M/1 queue**, which has exact formulas. With arrival rate $\lambda = 1/180$ and service rate $\mu = 1/45$ per minute:
+
+- Utilization: $\rho = \lambda / \mu = 0.25$. The engine is busy 25% of the time.
+- Probability a call has to wait: $\rho = 0.25$.
+- Mean wait in queue: $W_q = \rho / (\mu - \lambda) = 15$ minutes.
+
+```{r}
+#| label: m1-theory
+lambda <- 1 / 180
+mu     <- 1 / 45
+rho    <- lambda / mu
+
+tibble(
+  metric     = c("utilization", "P(call waits)", "mean wait (min)"),
+  theory     = c(rho, rho, rho / (mu - lambda)),
+  simulation = c(
+    sum(arrivals_m1$activity_time) / one_year,
+    mean(arrivals_m1$wait > 0.001),
+    mean(arrivals_m1$wait)
+  )
+)
+```
+
+The simulated values are close to theory but not identical. That gap is the subject of the next section.
+
+::: callout-tip
+## Always validate the simplest version
+
+Matching a known result is the cheapest way to catch modeling bugs. Once the simple model checks out, add realism one piece at a time.
+:::
+
+::: callout-warning
+## The most common simmer bug: a value instead of a function
+
+`timeout(rexp(1, 1/45))` draws **one** random number when the trajectory is built, and every call then uses that same duration. `timeout(function() rexp(1, 1/45))` draws a fresh value for each call. The same goes for `distribution =` in `add_generator()` and for values in `set_attribute()`. If every call in your output has the same duration, this is why.
+:::
+
+## Model 1b: replications
+
+A simulation run is one random sample of how a year *could* go. Run it again with another seed and you get different numbers. To report a result you need **many replications** and the spread across them.
+
+Wrap the model in a function, run it many times, and `wrap()` each environment so the results survive outside the function:
+
+```{r}
+#| label: m1-reps
+run_m1 <- function(seed) {
+  set.seed(seed)
+  simmer("one engine") %>%
+    add_resource("engine", capacity = 1) %>%
+    add_generator("call", call_m1, distribution = function() rexp(1, rate = 1 / 180)) %>%
+    run(until = one_year) %>%
+    wrap()
+}
+
+envs_m1 <- map(1:50, run_m1)
+
+# Passing a list of environments adds a `replication` column
+rep_waits <- get_mon_arrivals(envs_m1) %>%
+  mutate(wait = end_time - start_time - activity_time) %>%
+  group_by(replication) %>%
+  summarise(mean_wait = mean(wait))
+
+rep_waits %>%
+  summarise(
+    mean   = mean(mean_wait),
+    lower  = mean - qt(0.975, n() - 1) * sd(mean_wait) / sqrt(n()),
+    upper  = mean + qt(0.975, n() - 1) * sd(mean_wait) / sqrt(n()),
+    min    = min(mean_wait),
+    max    = max(mean_wait)
+  )
+```
+
+```{r}
+#| label: m1-reps-plot
+#| fig-height: 3
+ggplot(rep_waits, aes(mean_wait)) +
+  geom_histogram(binwidth = 1, fill = "grey60", colour = "white") +
+  geom_vline(xintercept = 15, linetype = "dashed") +
+  labs(x = "Mean wait for the engine (min)", y = "Replications",
+       title = "50 simulated years",
+       subtitle = "Dashed line: M/M/1 theory (15 min)")
+```
+
+Individual years range widely, but the average across replications lands close to 15 minutes, and its 95% confidence interval should contain it. Rule of thumb: **report the mean across replications with a confidence interval, never a single run.**
+
+## Model 2: a dispatch area
+
+Now for something that looks like a real department.
+
+### The dummy district
+
+Three stations each have one engine and cover six response zones. Here are the travel times in minutes from each station to each zone. In a real model they would come from `travel_matrix_minimal.csv`.
+
+```{r}
+#| label: m2-data
+stations <- c("Station 1", "Station 2", "Station 3")
+
+travel <- matrix(
+  c( 3,  5,  9, 11,  7, 12,
+     8,  4,  3,  6, 10,  8,
+    12,  9,  7,  4,  5,  3),
+  nrow = 3, byrow = TRUE,
+  dimnames = list(stations, paste0("Z", 1:6))
+)
+travel
+
+zones <- tibble(
+  zone          = 1:6,
+  calls_per_day = c(4, 6, 8, 3, 3, 2)
+)
+```
+
+Each zone's **run order** is the stations sorted by travel time. The first one is the **first-due** station.
+
+```{r}
+#| label: m2-run-order
+run_order <- map(1:6, \(z) names(sort(travel[, z])))
+names(run_order) <- paste0("Z", 1:6)
+str(run_order)
+```
+
+Station 2 is first-due for zones 2 and 3, the two busiest zones, so it should be the busiest company.
+
+### Realistic call demand
+
+Real call volume follows a daily cycle: it's lowest around 05:00 and peaks in the late afternoon. We'll model that with a multiplier on the average rate:
+
+```{r}
+#| label: m2-profile
+#| fig-height: 2.5
+hourly_profile <- function(t_min) {
+  hour <- (t_min / 60) %% 24
+  1 + 0.5 * sin(2 * pi * (hour - 11) / 24) # peak 17:00, trough 05:00, averages 1
+}
+
+tibble(hour = seq(0, 24, 0.25)) %>%
+  ggplot(aes(hour, hourly_profile(hour * 60))) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0, 24, 4)) +
+  labs(x = "Hour of day", y = "Demand multiplier")
+```
+
+Rather than using `add_generator()`, we'll **generate the calls up front as a data frame** and feed it to simmer with `add_dataframe()`. This has three advantages:
+
+- Time-varying demand is easy to produce correctly, using thinning: generate calls at the peak rate, then keep each one with probability `profile / peak`.
+- Every random draw about a call (zone, call type, on-scene time) lives in the data. That lets us run two scenarios against the **exact same calls** later on.
+- It's the same shape as historical CAD data, so you can later replay real incidents through the model.
+
+```{r}
+#| label: m2-generate
+generate_calls <- function(days, seed) {
+  set.seed(seed)
+  horizon   <- days * 24 * 60
+  peak_rate <- sum(zones$calls_per_day) / (24 * 60) * 1.5  # calls per minute at peak
+
+  # Thinning: candidate calls at the peak rate, keep each with prob. profile / peak
+  t <- sort(runif(rpois(1, peak_rate * horizon), 0, horizon))
+  t <- t[runif(length(t)) < hourly_profile(t) / 1.5]
+  n <- length(t)
+
+  fire_call <- rbinom(n, 1, 0.25)  # 25% fire, 75% EMS
+
+  tibble(
+    time          = t,
+    zone          = sample(zones$zone, n, replace = TRUE, prob = zones$calls_per_day),
+    fire_call     = fire_call,
+    turnout_min   = rgamma(n, shape = 9, rate = 6),         # mean 1.5 min
+    travel_factor = rlnorm(n, 0, 0.15),                     # traffic, route noise
+    onscene_min   = if_else(fire_call == 1,
+                            rlnorm(n, log(40), 0.5),        # fire: median 40 min
+                            rlnorm(n, log(25), 0.4))        # EMS:  median 25 min
+  )
+}
+
+calls <- generate_calls(days = 30, seed = 1)
+head(calls)
+nrow(calls) / 30  # calls per day
+```
+
+`add_dataframe()` turns every column except `time` into a call **attribute**: a numeric value attached to that call, which the trajectory can read with `get_attribute()`. Attributes must be numeric, which is why zones are numbered `1:6` instead of named.
+
+### Dispatch: closest *idle* unit
+
+Here's the dispatch rule:
+
+1. Walk the zone's run order and send the first station whose engine is in quarters.
+2. If every engine is out, hold the call for the first-due station.
+
+simmer's `select()` picks which resource the next `seize_selected()` will use. It has built-in policies, but **`"first-available"` doesn't mean "first idle"**: it only skips resources whose capacity is zero. To get closest-idle dispatch we pass `select()` a function that inspects the system:
+
+```r
+dispatch <- function() {
+  order <- run_order[[get_attribute(env, "zone")]]
+  idle  <- get_server_count(env, order) < get_capacity(env, order)
+  if (any(idle)) order[which(idle)[1]] else order[1]
+}
+```
+
+`get_server_count()` is how many units of a resource are busy right now, and `get_capacity()` is how many it has. Reading live system state from inside the trajectory like this is how you write any custom logic: move-ups, call-type rules, mutual aid and so on.
+
+::: callout-note
+Rule 2 is a simplification. A real dispatcher would send whichever unit clears first, not wait specifically for the first-due one. Holding for first-due is easy to code and fine at moderate utilization. Improving it is one of the exercises.
+:::
+
+### The call trajectory
+
+```{mermaid}
+flowchart LR
+  A[Call received] --> B{Dispatch:<br/>closest idle unit}
+  B --> C[Seize unit<br/>wait if all busy]
+  C --> D[Turnout] --> E[Travel] --> F[On scene] --> G[Return to quarters] --> H[Release unit]
+```
+
+Response time is measured from call received to unit on scene:
+
+$$\text{response} = \text{waiting for a unit} + \text{turnout} + \text{travel}$$
+
+Dispatch processing time (call answer to alert) is left out to keep things short.
+
+The whole model goes in one function. Note that `env` is created *first*, inside the function: the trajectory's helper functions look `env` up when they run, so it must exist in the same scope.
+
+```{r}
+#| label: m2-model
+run_district <- function(calls, capacity = c(1, 1, 1)) {
+  env <- simmer("district")
+
+  att <- function(key) get_attribute(env, key)
+
+  dispatch <- function() {
+    order <- run_order[[att("zone")]]
+    idle  <- get_server_count(env, order) < get_capacity(env, order)
+    if (any(idle)) order[which(idle)[1]] else order[1]
+  }
+
+  call <- trajectory("call") %>%
+    set_attribute("received_at", function() now(env)) %>%
+    select(dispatch) %>%
+    seize_selected() %>%
+    set_attribute("dispatched_at", function() now(env)) %>%
+    set_attribute("station", function() match(get_selected(env), stations)) %>%
+    set_attribute("travel_min", function() travel[get_selected(env), att("zone")] * att("travel_factor")) %>%
+    timeout(function() att("turnout_min") + att("travel_min")) %>%
+    set_attribute("on_scene_at", function() now(env)) %>%
+    timeout(function() att("onscene_min")) %>%
+    timeout(function() att("travel_min")) %>%   # back to quarters
+    release_selected()
+
+  for (i in seq_along(stations)) {
+    env %>% add_resource(stations[i], capacity = capacity[i])
+  }
+
+  env %>%
+    add_dataframe("call", call, calls, time = "absolute",  # see note below
+                  mon = 2) %>%                             # mon = 2 also records attributes
+    run() %>%                                       # until every call has cleared
+    wrap()
+}
+
+env_m2 <- run_district(calls)
+```
+
+::: callout-warning
+## `add_dataframe()` assumes interarrival times
+
+By default `add_dataframe()` reads the `time` column as the *gap since the previous call*, not the clock time of the call. Our `time` column holds clock times, so we need `time = "absolute"`. Get this wrong and nothing errors: the calls just spread out over years, units are almost never busy, and every scenario looks identical. A quick check that catches it: `now(env)` after `run()` should be close to your intended horizon.
+:::
+
+### Results
+
+`get_mon_attributes()` returns one long row per attribute write. Pivot it wide to get one row per call:
+
+```{r}
+#| label: m2-tidy
+tidy_calls <- function(env) {
+  get_mon_attributes(env) %>%
+    dplyr::select(replication, name, key, value) %>%
+    pivot_wider(names_from = key, values_from = value) %>%
+    mutate(
+      zone        = paste0("Z", zone),
+      station     = stations[station],
+      first_due   = map_chr(zone, \(z) run_order[[z]][1]),
+      wait_min    = dispatched_at - received_at,
+      response    = on_scene_at - received_at
+    )
+}
+
+results_m2 <- tidy_calls(env_m2)
+
+results_m2 %>%
+  dplyr::select(name, zone, station, first_due, wait_min, turnout_min, travel_min, response) %>%
+  head()
+```
+
+Three numbers fire departments track:
+
+```{r}
+#| label: m2-zone-summary
+results_m2 %>%
+  group_by(zone) %>%
+  summarise(
+    calls            = n(),
+    p90_response     = quantile(response, 0.9),
+    pct_within_8     = mean(response <= 8),
+    first_due_reliab = mean(station == first_due)
+  )
+```
+
+- **90th percentile response** is the standard way to report response times. Averages hide the long tail.
+- **% within 8 minutes** is an illustrative target. Use your department's standard.
+- **First-due reliability** is the share of a zone's calls answered by its own first-due station. When it drops, a neighboring company is covering, so travel times get longer.
+
+**Unit-hour utilization** (UHU) is the share of time each company is committed to calls. Using `per_resource = TRUE` breaks the arrivals monitor down by resource:
+
+```{r}
+#| label: m2-uhu
+horizon <- 30 * 24 * 60
+
+get_mon_arrivals(env_m2, per_resource = TRUE) %>%
+  group_by(resource) %>%
+  summarise(calls = n(), uhu = sum(activity_time) / horizon)
+```
+
+Station 2 is the busiest company, committed to calls about 30% of the time. That's a daily average, though. Busy time bunches up in the afternoon and evening, when demand peaks, and that's when zones 2 and 3 lose their first-due engine. Grouping calls into 4-hour blocks of the day shows it:
+
+```{r}
+#| label: m2-by-hour
+#| fig-height: 3
+results_m2 %>%
+  filter(zone %in% c("Z2", "Z3")) %>%
+  mutate(block = floor((received_at / 60) %% 24 / 4) * 4) %>%
+  group_by(block) %>%
+  summarise(first_due_reliab = mean(station == first_due)) %>%
+  ggplot(aes(block + 2, first_due_reliab)) +
+  geom_col(width = 3.6, fill = "grey60") +
+  scale_x_continuous(breaks = seq(0, 24, 4)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = "Hour of day", y = "First-due reliability",
+       title = "Station 2's zones, by time of call",
+       subtitle = "Coverage drops when afternoon and evening demand peaks")
+```
+
+This is a single 30-day run, so treat the exact bar heights as noisy. The next section adds replications.
+
+## Model 3: comparing scenarios
+
+The question: **what does a second engine at Station 2 buy us?**
+
+To compare scenarios fairly, run both configurations against the **same calls** in each replication. This is called *common random numbers*. Both scenarios see the same random noise, so the difference between them reflects the change you made rather than luck. Because we put all the randomness in the call data frame, we get this for free.
+
+```{r}
+#| label: m3-run
+scenarios <- list(
+  "Base"                = c(1, 1, 1),
+  "Second unit at St 2" = c(1, 2, 1)
+)
+
+results_m3 <- map(1:30, function(rep) {
+  calls <- generate_calls(days = 30, seed = rep)
+  imap(scenarios, function(capacity, scenario) {
+    tidy_calls(run_district(calls, capacity)) %>%
+      mutate(rep = rep, scenario = scenario)
+  }) %>% list_rbind()
+}) %>% list_rbind()
+```
+
+Summarize each replication, then compare scenarios **pairwise within a replication**:
+
+```{r}
+#| label: m3-compare
+by_rep <- results_m3 %>%
+  group_by(scenario, rep) %>%
+  summarise(
+    p90_response     = quantile(response, 0.9),
+    pct_within_8     = mean(response <= 8),
+    first_due_reliab = mean(station == first_due),
+    .groups = "drop"
+  )
+
+by_rep %>%
+  pivot_longer(c(p90_response, pct_within_8, first_due_reliab), names_to = "metric") %>%
+  pivot_wider(names_from = scenario, values_from = value) %>%
+  mutate(diff = `Second unit at St 2` - Base) %>%
+  group_by(metric) %>%
+  summarise(
+    base       = mean(Base),
+    new        = mean(`Second unit at St 2`),
+    mean_diff  = mean(diff),
+    ci_low     = mean_diff - qt(0.975, n() - 1) * sd(diff) / sqrt(n()),
+    ci_high    = mean_diff + qt(0.975, n() - 1) * sd(diff) / sqrt(n())
+  )
+```
+
+```{r}
+#| label: m3-plot
+#| fig-height: 3.5
+results_m3 %>%
+  group_by(scenario, zone) %>%
+  summarise(p90_response = quantile(response, 0.9), .groups = "drop") %>%
+  ggplot(aes(zone, p90_response, fill = scenario)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("grey65", "#2b6cb0")) +
+  labs(x = NULL, y = "90th percentile response (min)", fill = NULL,
+       title = "Where the second unit helps") +
+  theme(legend.position = "top")
+```
+
+Two things happen, and the second one is the interesting part:
+
+- **First-due reliability improves only in zones 2 and 3.** That's expected, since only Station 2 changed.
+- **The 90th percentile response improves in every zone,** including zones 1 and 4–6, whose first-due stations didn't change. In the base case, when Station 2's engine was out, Station 1 or Station 3 covered its calls. That pulled them out of their own zones, so *their* next call got a longer response. The second unit at Station 2 stops that knock-on effect.
+
+Check this yourself by comparing reliability and the 90th percentile per zone:
+
+```{r}
+#| label: m3-by-zone
+results_m3 %>%
+  mutate(scenario = if_else(scenario == "Base", "base", "new")) %>%
+  group_by(zone, scenario) %>%
+  summarise(
+    p90         = quantile(response, 0.9),
+    reliability = mean(station == first_due),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = scenario, values_from = c(p90, reliability))
+```
+
+A static coverage map would credit the new unit only to Station 2's own zones. The simulation shows it also protects the neighbors, because **it captures what happens when units are busy.**
+
+## Using this repo's real data {#sec-real-data}
+
+The dummy model's pieces map directly onto this repo's datasets:
+
+| Dummy model | Real data |
+|---|---|
+| `travel` (station × zone) | `datasets/cad_incident_travel_matrix_minimal.csv` (station × incident) |
+| `generate_calls()` | Historical incidents from the CAD export, with real timestamps |
+| `run_order` per zone | Stations sorted by `duration_min` per incident (or the CAD run cards) |
+| `onscene_min` | Observed on-scene durations from CAD unit times |
+
+The simplest upgrade is to replay history: treat each incident as its own "zone". Then the travel lookup becomes a join instead of a 3 × 6 matrix:
+
+```{r}
+#| label: real-data-sketch
+#| eval: false
+od <- read_csv("datasets/cad_incident_travel_matrix_minimal.csv")
+
+run_order_by_incident <- od %>%
+  arrange(incident_number, duration_min) %>%
+  group_by(incident_number) %>%
+  summarise(order = list(paste("Station", station_id)))
+
+# In the trajectory, look up travel time by (selected station, incident index)
+# instead of travel[station, zone]. Incident numbers are strings, so pass a
+# numeric row index as the attribute and look up the incident number inside.
+```
+
+Things to settle before trusting real-data results:
+
+- **Unit times.** You need CAD unit timestamps (dispatched, en route, on scene, cleared) for turnout and on-scene durations, and to calibrate OSRM travel times against observed en-route-to-on-scene times. The README covers this.
+- **Multi-unit calls.** Structure fires commit several units. Use `seize()` on several resources, or `clone()` to send parallel units.
+- **Warm-up.** Each run starts with every unit in quarters. With long runs at moderate load this barely matters, but at high load, discard the first day or so.
+- **Validation.** Run the model against a historical period and check that simulated UHU and response times match what actually happened. Only then trust the what-ifs.
+
+## Exercises
+
+1. **Busier district.** Double every zone's `calls_per_day`. Which metric degrades first? Where does the "hold for first-due" rule start to look unrealistic?
+2. **Better queueing rule.** When every unit is busy, send the call to whichever station clears first. Hint: record each station's expected clear time in a global with `set_global()`, or switch to one shared resource with capacity 3 and pick the unit after seizing.
+3. **Priorities.** Add a `priority` column to the calls (for example, fire = 1, EMS = 0). `add_dataframe()` picks it up automatically, so higher-priority calls jump the queue.
+4. **Relocation instead of addition.** Keep three engines, but replace Station 1's row of `travel` with travel times from a hypothetical new site between Stations 1 and 2. Compare it with the second-unit scenario.
+5. **Validate Model 1 harder.** Change the service time to lognormal. M/M/1 no longer applies, but the Pollaczek–Khinchine formula for M/G/1 does: $W_q = \lambda E[S^2] / (2(1-\rho))$. Does the simulation match?
+
+## Reference
+
+- simmer website and vignettes: <https://r-simmer.org>. The "Advanced trajectory usage" and "Queueing systems" vignettes go deeper on what's covered here.
+- Ucar, Smeets & Azcorra (2019), "simmer: Discrete-Event Simulation for R", *Journal of Statistical Software* 90(2).
+- simmer cheat sheet of the core verbs:
+
+| Verb | Use |
+|---|---|
+| `seize()` / `release()` | Take or return a named resource |
+| `select()` + `seize_selected()` / `release_selected()` | Choose the resource at runtime |
+| `timeout()` | Spend time |
+| `set_attribute()` / `get_attribute()` | Per-call data |
+| `set_global()` / `get_global()` | Shared simulation-wide data |
+| `branch()` | Different paths per call (for example, fire vs EMS) |
+| `clone()` / `synchronize()` | Parallel units on one call |
+| `now()`, `get_server_count()`, `get_queue_count()`, `get_capacity()` | Read live system state |
+| `get_mon_arrivals()`, `get_mon_resources()`, `get_mon_attributes()` | Results |

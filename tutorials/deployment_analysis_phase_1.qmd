@@ -1,0 +1,129 @@
+---
+title: "Deployment analysis, phase 1"
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-tools: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(lubridate)
+
+source("./r/transition_helpers.R")
+```
+
+## Load
+
+```{r}
+#| label: load
+deploy_df <- read_csv(
+  "./datasets/2026-10-05_deployment_analysis_phase_1.csv",
+  na = "NULL",
+  show_col_types = FALSE
+)
+```
+
+## Incidents
+
+One row per incident, with missing states as `"None"`.
+
+```{r}
+#| label: incidents
+incident_df <- deploy_df %>%
+  distinct(
+    incident_number,
+    proqa_case_type,
+    proqa_dispatch_code,
+    cad_initial_incident_type_code,
+    cad_incident_type_code,
+    rms_incident_type_code
+  ) %>%
+  mutate(
+    across(-incident_number, \(x) replace_na(x, "None")),
+    proqa_dispatch_key = make_dispatch_key(proqa_case_type, proqa_dispatch_code)
+  )
+```
+
+## Lookup tables
+
+```{r}
+#| label: lookups
+proqa_lookup <- deploy_df %>%
+  drop_na(proqa_dispatch_code) %>%
+  transmute(
+    state = make_dispatch_key(proqa_case_type, proqa_dispatch_code),
+    category = proqa_dispatch_category,
+    level = proqa_dispatch_level,
+    subcategory = proqa_dispatch_sub_category
+  ) %>%
+  most_common()
+
+# Only the final CAD type has a description column, so it also labels the
+# initial type. A handful of initial codes never appear as a final type and
+# will have no description.
+cad_lookup <- deploy_df %>%
+  drop_na(cad_incident_type_code) %>%
+  transmute(
+    state = cad_incident_type_code,
+    description = cad_incident_type_description
+  ) %>%
+  most_common()
+
+rms_lookup <- deploy_df %>%
+  drop_na(rms_incident_type_code) %>%
+  transmute(
+    state = rms_incident_type_code,
+    description = rms_incident_type_description,
+    category = rms_incident_type_category,
+    subcategory = rms_incident_type_subcategory
+  ) %>%
+  most_common()
+
+# One table keyed by stage, because the same code can mean different things
+# at different stages.
+state_lookup <- bind_rows(
+  proqa_dispatch = proqa_lookup,
+  cad_initial = cad_lookup,
+  cad_final = cad_lookup,
+  rms = rms_lookup,
+  .id = "stage"
+)
+```
+
+## Phases
+
+```{r}
+#| label: phases
+# 1: ProQA case type -> dispatch code
+phase_1 <- incident_df %>%
+  count_transition(proqa_case_type, proqa_dispatch_key, 1, "proqa_case_type", "proqa_dispatch")
+
+# 2: CAD initial -> final type
+phase_2 <- incident_df %>%
+  count_transition(cad_initial_incident_type_code, cad_incident_type_code, 2, "cad_initial", "cad_final")
+
+# 3: CAD final -> RMS type
+phase_3 <- incident_df %>%
+  count_transition(cad_incident_type_code, rms_incident_type_code, 3, "cad_final", "rms")
+
+# 4: ProQA dispatch code -> RMS type
+phase_4 <- incident_df %>%
+  count_transition(proqa_dispatch_key, rms_incident_type_code, 4, "proqa_dispatch", "rms")
+```
+
+## Transition tables
+
+```{r}
+#| label: transitions
+transition_df <- bind_rows(phase_1, phase_2, phase_3) %>%
+  add_percent()
+
+proqa_to_rms_transition_df <- bind_rows(phase_1, phase_4) %>%
+  add_percent()
+```
