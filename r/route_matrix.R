@@ -10,7 +10,6 @@ options(
 # osrm-routed must be started with --max-table-size >= chunk_size + number of stations
 chunk_size <- 900
 
-
 station_df <- read.csv("datasets/stations.csv", stringsAsFactors = FALSE)
 address_df <- read.csv("datasets/addresses.csv", stringsAsFactors = FALSE) %>%
   distinct(siteaddid, .keep_all = TRUE)
