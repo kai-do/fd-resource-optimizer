@@ -1,5 +1,5 @@
 # test osrm
-library(osrm.backend)
+
 library(osrm)
 library(sf)
 options(osrm.server = "http://127.0.0.1:5000/", osrm.profile = "car")
