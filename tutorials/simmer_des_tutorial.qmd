@@ -578,7 +578,7 @@ The dummy model's pieces map directly onto this repo's datasets:
 
 | Dummy model | Real data |
 |---|---|
-| `travel` (station × zone) | `datasets/cad_incident_travel_matrix_minimal.csv` (station × incident) |
+| `travel` (station × zone) | `datasets/archive/cad_incident_travel_matrix_minimal.csv` (station × incident) |
 | `generate_calls()` | Historical incidents from the CAD export, with real timestamps |
 | `run_order` per zone | Stations sorted by `duration_min` per incident (or the CAD run cards) |
 | `onscene_min` | Observed on-scene durations from CAD unit times |
@@ -588,7 +588,7 @@ The simplest upgrade is to replay history: treat each incident as its own "zone"
 ```{r}
 #| label: real-data-sketch
 #| eval: false
-od <- read_csv("datasets/cad_incident_travel_matrix_minimal.csv")
+od <- read_csv("datasets/archive/cad_incident_travel_matrix_minimal.csv")
 
 run_order_by_incident <- od %>%
   arrange(incident_number, duration_min) %>%

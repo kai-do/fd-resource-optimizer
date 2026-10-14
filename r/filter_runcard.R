@@ -2,7 +2,7 @@ library(tidyverse)
 
 # load in runcard in the format output by cad_run_card.sql
 runcard_df <- read_csv(
-  'datasets/2026-10-13_cad_run_card.csv',
+  'datasets/inputs/2026-10-13_cad_run_card.csv',
   na = 'NULL',
   col_types = cols(
     location_id = col_integer(),

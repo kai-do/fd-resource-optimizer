@@ -1,8 +1,9 @@
 source("r/build_travel_matrix.R")
+library(data.table)
 
-incident_address_df <- read.csv('datasets/2026-10-13_incident_address_data.csv', na = 'NULL')
+incident_address_df <- fread('datasets/inputs/2026-10-13_incident_address_data.csv', na.strings = 'NULL', data.table = FALSE)
 
-station_address_df <- read.csv('datasets/2026-10-13_station_addresses.csv', stringsAsFactors = FALSE) %>%
+station_address_df <- fread('datasets/inputs/2026-10-13_station_addresses.csv', data.table = FALSE) %>%
   filter(dept == "Cobb", abbrev != 'FHQ') %>%
   mutate(station_id = as.integer(str_extract(abbrev, '[0-9]+')))
 
@@ -33,4 +34,4 @@ cat("Building matrix:", nrow(station_df), "stations x", nrow(incident_df), "inci
 # osrm-routed must be started with --max-table-size >= 900 + nrow(station_df)
 travel_matrix <- build_travel_matrix(station_df, incident_df)
 
-write_csv(travel_matrix, "datasets/2026-10-13_incident_travel_matrix.csv", na = "")
+write_csv(travel_matrix, "datasets/outputs/incident_travel_matrix.csv", na = "")
