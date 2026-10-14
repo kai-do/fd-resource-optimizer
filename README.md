@@ -47,3 +47,7 @@ The script drops CAD incidents with missing or `(0, 0)` coordinates before routi
 
 - OSRM's `car` profile models civilian driving speeds, not emergency response. Calibrate against observed CAD en-route-to-on-scene times before using these as response-time estimates.
 - `duration_min` is travel time only. Add turnout time before comparing against total response-time standards such as NFPA 1710.
+
+## Shiny app
+
+Run `r/08-prep_app_data.R` once, then `shiny::runApp('app')` from the repo root. Needs shiny, bslib, leaflet, DT in addition to the pipeline packages.
