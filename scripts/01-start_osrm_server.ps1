@@ -1,5 +1,5 @@
 # Runs osrm-routed directly (no R process). Stop with Ctrl+C.
-#   powershell -File scripts\start_osrm_server.ps1
+#   powershell -File scripts\01-start_osrm_server.ps1
 # Override defaults with parameters, e.g. -Port 5001
 
 param(

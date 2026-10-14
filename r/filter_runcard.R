@@ -22,15 +22,15 @@ filter_runcard <- function(
   included_response_sequences = 1,
   included_location_types = c('Beat')
 ) {
-  runcard_df %>%
+  runcard_df |>
     filter(
       is.null(selected_stations) | responding_station_id %in% selected_stations,
       agency %in% included_agencies,
       location_type %in% included_location_types
-    ) %>%
-    group_by(location_id) %>%
-    arrange(location_id, response_sequence) %>%
-    mutate(adjusted_response_sequence = as.integer(row_number())) %>%
-    ungroup() %>%
+    ) |>
+    group_by(location_id) |>
+    arrange(location_id, response_sequence) |>
+    mutate(adjusted_response_sequence = as.integer(row_number())) |>
+    ungroup() |>
     filter(adjusted_response_sequence %in% included_response_sequences)
 }

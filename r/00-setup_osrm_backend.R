@@ -1,5 +1,5 @@
 # One-time setup: installs the osrm.backend package and the prebuilt OSRM binaries.
-# To start a server, run r/start_osrm_server.R.
+# To start a server, run scripts/01-start_osrm_server.ps1.
 
 if (!requireNamespace("osrm.backend", quietly = TRUE)) install.packages("osrm.backend")
 library(osrm.backend)

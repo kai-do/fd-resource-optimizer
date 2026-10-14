@@ -29,7 +29,7 @@ deploy_df <- read_csv(
   show_col_types = FALSE
 )
 
-test <- deploy_df %>%
+test <- deploy_df |>
   distinct(proqa_dispatch_code, proqa_dispatch_code_description)
 ```
 
@@ -39,7 +39,7 @@ One row per incident, with missing states as `"None"`.
 
 ```{r}
 #| label: incidents
-incident_df <- deploy_df %>%
+incident_df <- deploy_df |>
   distinct(
     incident_number,
     proqa_case_type,
@@ -47,13 +47,13 @@ incident_df <- deploy_df %>%
     cad_initial_incident_type_code,
     cad_incident_type_code,
     rms_incident_type_code
-  ) %>%
+  ) |>
   mutate(
     across(-incident_number, \(x) replace_na(x, "None")),
     proqa_dispatch_key = make_dispatch_key(proqa_case_type, proqa_dispatch_code)
   )
 
-unit_response_df <- deploy_df %>%
+unit_response_df <- deploy_df |>
   distinct(
     incident_number,
     proqa_case_type,
@@ -73,18 +73,18 @@ unit_response_df <- deploy_df %>%
     response_time_sec = as.numeric(difftime(on_scene_date_time, dispatch_date_time, units = "secs")),
     commit_time_sec = as.numeric(difftime(clear_date_time, dispatch_date_time, units = "secs")),
     unit_arrived_flag = if_else(!is.na(on_scene_date_time), TRUE, FALSE)
-  ) %>%
+  ) |>
   mutate(
     across(c(proqa_case_type, proqa_dispatch_code, cad_initial_incident_type_code, cad_incident_type_code, rms_incident_type_code, callsign, unit_type), \(x) replace_na(x, "None")),
     proqa_dispatch_key = make_dispatch_key(proqa_case_type, proqa_dispatch_code)
   )
 
-apparatus_agg_df <- deploy_df %>%
-  group_by(incident_number, unit_type) %>%
+apparatus_agg_df <- deploy_df |>
+  group_by(incident_number, unit_type) |>
   summarise(
     responses = n(),
     .groups = "drop"
-  ) %>% 
+  ) |> 
     pivot_wider(
       names_from = unit_type,
       values_from = responses,
@@ -97,8 +97,8 @@ apparatus_agg_df <- deploy_df %>%
 
 ```{r}
 #| label: lookups
-proqa_lookup <- deploy_df %>%
-  drop_na(proqa_dispatch_code) %>%
+proqa_lookup <- deploy_df |>
+  drop_na(proqa_dispatch_code) |>
   transmute(
     category_code = as.integer(proqa_dispatch_category),
     category_description = proqa_dispatch_category_description,
@@ -116,22 +116,22 @@ proqa_lookup <- deploy_df %>%
     subcategory_description = proqa_dispatch_code_description,
     code = make_dispatch_key(proqa_case_type, proqa_dispatch_code),
     code_description = paste(category_description, '-', level_description, '-', subcategory_description)
-  ) %>%
+  ) |>
     most_common()
 
 # Only the final CAD type has a description column, so it also labels the
 # initial type. A handful of initial codes never appear as a final type and
 # will have no description.
-cad_lookup <- deploy_df %>%
-  drop_na(cad_incident_type_code) %>%
+cad_lookup <- deploy_df |>
+  drop_na(cad_incident_type_code) |>
   transmute(
     code = cad_incident_type_code,
     code_description = cad_incident_type_description
-  ) %>%
+  ) |>
     most_common()
 
-rms_lookup <- deploy_df %>%
-  drop_na(rms_incident_type_code) %>%
+rms_lookup <- deploy_df |>
+  drop_na(rms_incident_type_code) |>
   transmute(
     category_code = as.integer(str_sub(rms_incident_type_category, 1,1)),
     category_description = trimws(str_sub(rms_incident_type_category, 5, -1)),
@@ -139,7 +139,7 @@ rms_lookup <- deploy_df %>%
     subcategory_description = trimws(str_sub(rms_incident_type_subcategory, 5, -1)),
     code = rms_incident_type_code,
     code_description = trimws(rms_incident_type_description)
-  ) %>%
+  ) |>
     most_common()
 
 
@@ -159,11 +159,11 @@ state_lookup <- bind_rows(
 ```{r}
 #| label: phases
 # 1: Call Recievied -> ProQA case type
-phase_1 <- incident_df %>%
+phase_1 <- incident_df |>
   count_transition(NA, proqa_dispatch_key, 1, "call_recieved", "proqa_dispatch")
 
 # : ProQA dispatch code -> RMS type
-phase_2 <- incident_df %>%
+phase_2 <- incident_df |>
   count_transition(proqa_dispatch_key, rms_incident_type_code, 2, "proqa_dispatch", "rms_nfirs") 
 ```
 
@@ -172,16 +172,16 @@ phase_2 <- incident_df %>%
 ```{r}
 #| label: transitions
 
-from_lu <- state_lookup %>%
+from_lu <- state_lookup |>
   select(from_stage = stage, from = code, from_category_code = category_code, from_category_description = category_description, from_subcategory_code = subcategory_code, from_subcategory_description = subcategory_description, from_code_description = code_description)
 
-to_lu <- state_lookup %>%
+to_lu <- state_lookup |>
   select(to_stage = stage, to = code, to_category_code = category_code, to_category_description = category_description, to_subcategory_code = subcategory_code, to_subcategory_description = subcategory_description, to_code_description = code_description)
 
-transition_df <- bind_rows(phase_1, phase_2) %>%
-  #add_percent() %>%
-  left_join(from_lu, by = c("from_stage", "from")) %>%
-  left_join(to_lu,   by = c("to_stage", "to")) #%>%
+transition_df <- bind_rows(phase_1, phase_2) |>
+  #add_percent() |>
+  left_join(from_lu, by = c("from_stage", "from")) |>
+  left_join(to_lu,   by = c("to_stage", "to")) #|>
   #distinct()
 
 ```
@@ -190,8 +190,8 @@ Hover over a tile for its count, or click it to pin the details above the plot.
 
 ```{r}
 #| label: heatmap
-heatmap_df <- transition_df %>%
-  filter(!is.na(from), !is.na(to)) %>%
+heatmap_df <- transition_df |>
+  filter(!is.na(from), !is.na(to)) |>
   mutate(
     tooltip = paste0(
       "From: ", from_code_description,
@@ -210,13 +210,13 @@ heatmap <- plot_ly(
   type = "heatmap",
   colorscale = "Magma",
   colorbar = list(title = "Count")
-) %>%
+) |>
   plotly::layout(
     title = "Incident type transitions",
     xaxis = list(title = "From", tickangle = -45),
     yaxis = list(title = "To"),
     margin = list(t = 120)
-  ) %>%
+  ) |>
   htmlwidgets::onRender("
     function(el) {
       var box = document.createElement('div');

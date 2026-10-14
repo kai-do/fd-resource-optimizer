@@ -71,9 +71,9 @@ A trajectory is a recipe each call follows:
 
 ```{r}
 #| label: m1-trajectory
-call_m1 <- trajectory("call") %>%
-  seize("engine", 1) %>%                         # wait for the engine, then take it
-  timeout(function() rexp(1, rate = 1 / 45)) %>% # busy for ~45 min
+call_m1 <- trajectory("call") |>
+  seize("engine", 1) |>                         # wait for the engine, then take it
+  timeout(function() rexp(1, rate = 1 / 45)) |> # busy for ~45 min
   release("engine", 1)                           # put it back in service
 
 call_m1
@@ -89,9 +89,9 @@ set.seed(42)
 
 one_year <- 365 * 24 * 60
 
-env_m1 <- simmer("one engine") %>%
-  add_resource("engine", capacity = 1) %>%
-  add_generator("call", call_m1, distribution = function() rexp(1, rate = 1 / 180)) %>%
+env_m1 <- simmer("one engine") |>
+  add_resource("engine", capacity = 1) |>
+  add_generator("call", call_m1, distribution = function() rexp(1, rate = 1 / 180)) |>
   run(until = one_year)
 
 env_m1
@@ -115,10 +115,10 @@ What's left over is time spent **waiting in the queue**: the call was received, 
 
 ```{r}
 #| label: m1-wait
-arrivals_m1 <- arrivals_m1 %>%
+arrivals_m1 <- arrivals_m1 |>
   mutate(wait = end_time - start_time - activity_time)
 
-arrivals_m1 %>%
+arrivals_m1 |>
   summarise(
     calls       = n(),
     pct_waited  = mean(wait > 0.001),
@@ -132,8 +132,8 @@ arrivals_m1 %>%
 ```{r}
 #| label: m1-resource-plot
 #| fig-height: 3
-get_mon_resources(env_m1) %>%
-  filter(time < 3 * 24 * 60) %>%
+get_mon_resources(env_m1) |>
+  filter(time < 3 * 24 * 60) |>
   ggplot(aes(time / 60, server + queue)) +
   geom_step() +
   geom_hline(yintercept = 1, linetype = "dashed", colour = "grey50") +
@@ -191,22 +191,22 @@ Wrap the model in a function, run it many times, and `wrap()` each environment s
 #| label: m1-reps
 run_m1 <- function(seed) {
   set.seed(seed)
-  simmer("one engine") %>%
-    add_resource("engine", capacity = 1) %>%
-    add_generator("call", call_m1, distribution = function() rexp(1, rate = 1 / 180)) %>%
-    run(until = one_year) %>%
+  simmer("one engine") |>
+    add_resource("engine", capacity = 1) |>
+    add_generator("call", call_m1, distribution = function() rexp(1, rate = 1 / 180)) |>
+    run(until = one_year) |>
     wrap()
 }
 
 envs_m1 <- map(1:50, run_m1)
 
 # Passing a list of environments adds a `replication` column
-rep_waits <- get_mon_arrivals(envs_m1) %>%
-  mutate(wait = end_time - start_time - activity_time) %>%
-  group_by(replication) %>%
+rep_waits <- get_mon_arrivals(envs_m1) |>
+  mutate(wait = end_time - start_time - activity_time) |>
+  group_by(replication) |>
   summarise(mean_wait = mean(wait))
 
-rep_waits %>%
+rep_waits |>
   summarise(
     mean   = mean(mean_wait),
     lower  = mean - qt(0.975, n() - 1) * sd(mean_wait) / sqrt(n()),
@@ -279,7 +279,7 @@ hourly_profile <- function(t_min) {
   1 + 0.5 * sin(2 * pi * (hour - 11) / 24) # peak 17:00, trough 05:00, averages 1
 }
 
-tibble(hour = seq(0, 24, 0.25)) %>%
+tibble(hour = seq(0, 24, 0.25)) |>
   ggplot(aes(hour, hourly_profile(hour * 60))) +
   geom_line() +
   scale_x_continuous(breaks = seq(0, 24, 4)) +
@@ -378,27 +378,27 @@ run_district <- function(calls, capacity = c(1, 1, 1)) {
     if (any(idle)) order[which(idle)[1]] else order[1]
   }
 
-  call <- trajectory("call") %>%
-    set_attribute("received_at", function() now(env)) %>%
-    select(dispatch) %>%
-    seize_selected() %>%
-    set_attribute("dispatched_at", function() now(env)) %>%
-    set_attribute("station", function() match(get_selected(env), stations)) %>%
-    set_attribute("travel_min", function() travel[get_selected(env), att("zone")] * att("travel_factor")) %>%
-    timeout(function() att("turnout_min") + att("travel_min")) %>%
-    set_attribute("on_scene_at", function() now(env)) %>%
-    timeout(function() att("onscene_min")) %>%
-    timeout(function() att("travel_min")) %>%   # back to quarters
+  call <- trajectory("call") |>
+    set_attribute("received_at", function() now(env)) |>
+    select(dispatch) |>
+    seize_selected() |>
+    set_attribute("dispatched_at", function() now(env)) |>
+    set_attribute("station", function() match(get_selected(env), stations)) |>
+    set_attribute("travel_min", function() travel[get_selected(env), att("zone")] * att("travel_factor")) |>
+    timeout(function() att("turnout_min") + att("travel_min")) |>
+    set_attribute("on_scene_at", function() now(env)) |>
+    timeout(function() att("onscene_min")) |>
+    timeout(function() att("travel_min")) |>   # back to quarters
     release_selected()
 
   for (i in seq_along(stations)) {
-    env %>% add_resource(stations[i], capacity = capacity[i])
+    env |> add_resource(stations[i], capacity = capacity[i])
   }
 
-  env %>%
+  env |>
     add_dataframe("call", call, calls, time = "absolute",  # see note below
-                  mon = 2) %>%                             # mon = 2 also records attributes
-    run() %>%                                       # until every call has cleared
+                  mon = 2) |>                             # mon = 2 also records attributes
+    run() |>                                       # until every call has cleared
     wrap()
 }
 
@@ -418,9 +418,9 @@ By default `add_dataframe()` reads the `time` column as the *gap since the previ
 ```{r}
 #| label: m2-tidy
 tidy_calls <- function(env) {
-  get_mon_attributes(env) %>%
-    dplyr::select(replication, name, key, value) %>%
-    pivot_wider(names_from = key, values_from = value) %>%
+  get_mon_attributes(env) |>
+    dplyr::select(replication, name, key, value) |>
+    pivot_wider(names_from = key, values_from = value) |>
     mutate(
       zone        = paste0("Z", zone),
       station     = stations[station],
@@ -432,8 +432,8 @@ tidy_calls <- function(env) {
 
 results_m2 <- tidy_calls(env_m2)
 
-results_m2 %>%
-  dplyr::select(name, zone, station, first_due, wait_min, turnout_min, travel_min, response) %>%
+results_m2 |>
+  dplyr::select(name, zone, station, first_due, wait_min, turnout_min, travel_min, response) |>
   head()
 ```
 
@@ -441,8 +441,8 @@ Three numbers fire departments track:
 
 ```{r}
 #| label: m2-zone-summary
-results_m2 %>%
-  group_by(zone) %>%
+results_m2 |>
+  group_by(zone) |>
   summarise(
     calls            = n(),
     p90_response     = quantile(response, 0.9),
@@ -461,8 +461,8 @@ results_m2 %>%
 #| label: m2-uhu
 horizon <- 30 * 24 * 60
 
-get_mon_arrivals(env_m2, per_resource = TRUE) %>%
-  group_by(resource) %>%
+get_mon_arrivals(env_m2, per_resource = TRUE) |>
+  group_by(resource) |>
   summarise(calls = n(), uhu = sum(activity_time) / horizon)
 ```
 
@@ -471,11 +471,11 @@ Station 2 is the busiest company, committed to calls about 30% of the time. That
 ```{r}
 #| label: m2-by-hour
 #| fig-height: 3
-results_m2 %>%
-  filter(zone %in% c("Z2", "Z3")) %>%
-  mutate(block = floor((received_at / 60) %% 24 / 4) * 4) %>%
-  group_by(block) %>%
-  summarise(first_due_reliab = mean(station == first_due)) %>%
+results_m2 |>
+  filter(zone %in% c("Z2", "Z3")) |>
+  mutate(block = floor((received_at / 60) %% 24 / 4) * 4) |>
+  group_by(block) |>
+  summarise(first_due_reliab = mean(station == first_due)) |>
   ggplot(aes(block + 2, first_due_reliab)) +
   geom_col(width = 3.6, fill = "grey60") +
   scale_x_continuous(breaks = seq(0, 24, 4)) +
@@ -503,18 +503,18 @@ scenarios <- list(
 results_m3 <- map(1:30, function(rep) {
   calls <- generate_calls(days = 30, seed = rep)
   imap(scenarios, function(capacity, scenario) {
-    tidy_calls(run_district(calls, capacity)) %>%
+    tidy_calls(run_district(calls, capacity)) |>
       mutate(rep = rep, scenario = scenario)
-  }) %>% list_rbind()
-}) %>% list_rbind()
+  }) |> list_rbind()
+}) |> list_rbind()
 ```
 
 Summarize each replication, then compare scenarios **pairwise within a replication**:
 
 ```{r}
 #| label: m3-compare
-by_rep <- results_m3 %>%
-  group_by(scenario, rep) %>%
+by_rep <- results_m3 |>
+  group_by(scenario, rep) |>
   summarise(
     p90_response     = quantile(response, 0.9),
     pct_within_8     = mean(response <= 8),
@@ -522,11 +522,11 @@ by_rep <- results_m3 %>%
     .groups = "drop"
   )
 
-by_rep %>%
-  pivot_longer(c(p90_response, pct_within_8, first_due_reliab), names_to = "metric") %>%
-  pivot_wider(names_from = scenario, values_from = value) %>%
-  mutate(diff = `Second unit at St 2` - Base) %>%
-  group_by(metric) %>%
+by_rep |>
+  pivot_longer(c(p90_response, pct_within_8, first_due_reliab), names_to = "metric") |>
+  pivot_wider(names_from = scenario, values_from = value) |>
+  mutate(diff = `Second unit at St 2` - Base) |>
+  group_by(metric) |>
   summarise(
     base       = mean(Base),
     new        = mean(`Second unit at St 2`),
@@ -539,9 +539,9 @@ by_rep %>%
 ```{r}
 #| label: m3-plot
 #| fig-height: 3.5
-results_m3 %>%
-  group_by(scenario, zone) %>%
-  summarise(p90_response = quantile(response, 0.9), .groups = "drop") %>%
+results_m3 |>
+  group_by(scenario, zone) |>
+  summarise(p90_response = quantile(response, 0.9), .groups = "drop") |>
   ggplot(aes(zone, p90_response, fill = scenario)) +
   geom_col(position = "dodge") +
   scale_fill_manual(values = c("grey65", "#2b6cb0")) +
@@ -559,14 +559,14 @@ Check this yourself by comparing reliability and the 90th percentile per zone:
 
 ```{r}
 #| label: m3-by-zone
-results_m3 %>%
-  mutate(scenario = if_else(scenario == "Base", "base", "new")) %>%
-  group_by(zone, scenario) %>%
+results_m3 |>
+  mutate(scenario = if_else(scenario == "Base", "base", "new")) |>
+  group_by(zone, scenario) |>
   summarise(
     p90         = quantile(response, 0.9),
     reliability = mean(station == first_due),
     .groups = "drop"
-  ) %>%
+  ) |>
   pivot_wider(names_from = scenario, values_from = c(p90, reliability))
 ```
 
@@ -590,9 +590,9 @@ The simplest upgrade is to replay history: treat each incident as its own "zone"
 #| eval: false
 od <- read_csv("datasets/archive/cad_incident_travel_matrix_minimal.csv")
 
-run_order_by_incident <- od %>%
-  arrange(incident_number, duration_min) %>%
-  group_by(incident_number) %>%
+run_order_by_incident <- od |>
+  arrange(incident_number, duration_min) |>
+  group_by(incident_number) |>
   summarise(order = list(paste("Station", station_id)))
 
 # In the trajectory, look up travel time by (selected station, incident index)
