@@ -130,6 +130,45 @@ ems_capabilities_df <- read_csv(
 
 write_parquet(ems_capabilities_df, 'app/data/ems_capabilities.parquet')
 
+# Travel matrix for the app with every filter column already attached, so the app only has to read it.
+# Text columns are stored as factors (dictionary encoded) to keep it small and quick to load.
+# Coded incidents the capability file does not list are 'OTHER'; incidents with no dispatch code stay NA.
+app_matrix_df <- read_parquet(
+  'datasets/outputs/incident_travel_matrix_fdz.parquet',
+  col_select = c(
+    'source_id', 'dest_id', 'fdz', 'duration_min', 'distance_m', 'rms_source_system',
+    'rms_incident_type_code', 'cad_incident_type_code', 'dispatch_code'
+  )
+) |>
+  left_join(incident_category_df, by = c('dest_id' = 'incident_number')) |>
+  left_join(ems_capabilities_df, by = 'dispatch_code') |>
+  mutate(
+    ems_unit_capability = if_else(
+      is.na(ems_unit_capability) & !is.na(dispatch_code), 'OTHER', ems_unit_capability
+    ),
+    across(c(fdz, rms_source_system, ends_with('_code'), dispatch_case_type_description, ems_unit_capability), as.factor)
+  )
+
+write_parquet(app_matrix_df, 'app/data/travel_matrix_app.parquet', compression = 'zstd')
+
+# Small list of the values each filter can take, so the app can build its dropdowns without loading the matrix.
+value_cols <- c(
+  'incident_category_code', 'incident_subcategory_code', 'rms_incident_type_code', 'cad_incident_type_code',
+  'dispatch_case_type_description', 'ems_unit_capability', 'dispatch_category_code', 'dispatch_code'
+)
+filter_values <- list(
+  source_system = sort(unique(as.character(na.omit(app_matrix_df$rms_source_system)))),
+  columns = map(value_cols, \(col) sort(unique(as.character(na.omit(app_matrix_df[[col]]))))) |>
+    set_names(value_cols),
+  dispatch_capability = app_matrix_df |>
+    distinct(dispatch_code, ems_unit_capability) |>
+    filter(!is.na(dispatch_code)) |>
+    mutate(across(everything(), as.character))
+)
+
+saveRDS(filter_values, 'app/data/filter_values.rds')
+
 # checks
 travel_stats_df <- read_parquet('datasets/outputs/travel_stats.parquet')
-setdiff(na.omit(unique(travel_stats_df$fdz)), fdz_polygons_sf$fdz) # fdzs with no polygon, should be empty
+missing_polygons <- setdiff(na.omit(unique(travel_stats_df$fdz)), fdz_polygons_sf$fdz)
+stopifnot('fdzs with no polygon' = length(missing_polygons) == 0)

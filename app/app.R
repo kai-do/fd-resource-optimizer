@@ -29,33 +29,27 @@ cost_choices <- c(
   '90th Percentile Minutes' = 'p90_minutes'
 )
 
-# loaded once at startup, shared across sessions
-incident_category_df <- read_parquet(file.path(root, 'app/data/incident_categories.parquet'))
-travel_matrix_df <- read_parquet(
-  file.path(root, 'datasets/outputs/incident_travel_matrix_fdz.parquet'),
-  col_select = c(
-    'source_id', 'dest_id', 'fdz', 'duration_min', 'distance_m', 'rms_source_system',
-    'rms_incident_type_code', 'cad_incident_type_code', 'dispatch_code'
-  )
-) |>
-  left_join(incident_category_df, by = c('dest_id' = 'incident_number'))
+# the travel matrix is large, so it is read the first time stats are built (not at startup) and then shared across sessions
+matrix_path <- file.path(root, 'app/data/travel_matrix_app.parquet')
+matrix_cache <- new.env()
+get_travel_matrix <- function() {
+  if (is.null(matrix_cache$df)) {
+    matrix_cache$df <- read_parquet(matrix_path) |>
+      mutate(fdz = as.character(fdz)) # factors elsewhere, fdz is joined to polygons and run cards as text
+  }
+  matrix_cache$df
+}
 
-# EMS unit capability needed by each dispatch code. Coded incidents the file does not list are 'OTHER'
-# (all fire today), incidents with no dispatch code stay NA and drop out when the filter is used.
-ems_capabilities_df <- read_parquet(file.path(root, 'app/data/ems_capabilities.parquet'))
-travel_matrix_df <- travel_matrix_df |>
-  left_join(ems_capabilities_df, by = 'dispatch_code') |>
-  mutate(ems_unit_capability = if_else(is.na(ems_unit_capability) & !is.na(dispatch_code), 'OTHER', ems_unit_capability))
-dispatch_capability_df <- travel_matrix_df |>
-  distinct(dispatch_code, ems_unit_capability) |>
-  filter(!is.na(dispatch_code))
+# values for the filter dropdowns, written by r/08-prep_app_data.R so the matrix is not needed to build them
+filter_values <- readRDS(file.path(root, 'app/data/filter_values.rds'))
+dispatch_capability_df <- filter_values$dispatch_capability
 fdz_polygons_sf <- readRDS(file.path(root, 'app/data/fdz_polygons.rds'))
 stations_df <- read_parquet(file.path(root, 'app/data/stations.parquet'))
 runcard_df <- read_parquet(file.path(root, 'app/data/runcard_beats.parquet'))
 fdz_agency_df <- runcard_df |> distinct(fdz, agency)
 agency_choices <- sort(unique(fdz_agency_df$agency))
 
-source_system_choices <- sort(unique(na.omit(travel_matrix_df$rms_source_system)))
+source_system_choices <- filter_values$source_system
 station_choices <- set_names(stations_df$source_id, paste('Station', stations_df$source_id))
 
 # choices are named with their description so the dropdown shows and searches it
@@ -66,7 +60,7 @@ code_lookup_df <- read_parquet(file.path(root, 'app/data/code_lookup.parquet')) 
     description = c('Paramedic', 'AEMT', 'EMT-I / BLS', 'Ambulance Only', 'Other (No EMS Capability Listed)')
   ))
 code_choices <- pmap(filter_defs, \(key, label, col, prefix_code) {
-  codes <- sort(unique(na.omit(travel_matrix_df[[col]])))
+  codes <- filter_values$columns[[col]]
   desc <- code_lookup_df |>
     filter(filter_by == key) |>
     with(description[match(codes, code)])
@@ -197,7 +191,7 @@ server <- function(input, output, session) {
     input$build,
     {
       withProgress(message = 'Building Travel Stats', value = 0.5, {
-        stats <- get_travel_stats(travel_matrix_df, filters = current_filters())
+        stats <- get_travel_stats(get_travel_matrix(), filters = current_filters())
         # zones are limited to the selected agencies, so runs with and without the run card use the same zones
         if (length(input$agency) > 0) {
           agency_fdzs <- fdz_agency_df$fdz[fdz_agency_df$agency %in% input$agency]
@@ -211,6 +205,7 @@ server <- function(input, output, session) {
 
   output$stats_note <- renderText({
     s <- travel_stats()
+    if (nrow(s) == 0) return('No incidents match these filters')
     n_st <- n_distinct(s$source_id)
     n_inc <- s |> filter(!is.na(fdz)) |> distinct(fdz, n_incidents) |> pull(n_incidents) |> sum()
     paste0(format(n_inc, big.mark = ','), ' Incidents, ', n_st, ' Stations')
@@ -219,7 +214,8 @@ server <- function(input, output, session) {
   # keep p within the number of candidate stations
   observeEvent(travel_stats(), {
     n_st <- n_distinct(travel_stats()$source_id)
-    updateNumericInput(session, 'p', max = n_st, value = min(input$p, n_st))
+    req(n_st > 0)
+    updateNumericInput(session, 'p', max = n_st, value = min(input$p, n_st, na.rm = TRUE))
   })
 
   # per-fdz table for one solution, with the chosen statistic from the serving station
@@ -262,8 +258,10 @@ server <- function(input, output, session) {
       )
   }
 
-  # run the chosen solver on the current stats, keeping every alternative
-  result <- eventReactive(input$run, {
+  # run the chosen solver on the current stats, keeping every alternative.
+  # A failed run leaves the previous result in place so the view is not blanked.
+  result <- reactiveVal(NULL)
+  observeEvent(input$run, {
     stats <- travel_stats()
     method <- input$method
     cost_col <- input$cost_col
@@ -271,7 +269,20 @@ server <- function(input, output, session) {
     n_alts <- min(max(as.integer(input$n_alts), 1L, na.rm = TRUE), 10L)
     include <- as.integer(input$include)
     exclude <- as.integer(input$exclude)
-    tryCatch(
+
+    problem <- if (nrow(stats |> filter(!is.na(fdz))) == 0) {
+      'No incidents match the travel stats filters'
+    } else if (!isTRUE(is.finite(input$p) && input$p >= 1)) {
+      'Number of stations (p) must be at least 1'
+    } else if (method == 'mclp' && !isTRUE(is.finite(input$threshold))) {
+      'Coverage threshold must be a number'
+    }
+    if (!is.null(problem)) {
+      showNotification(problem, type = 'error', duration = 10)
+      return()
+    }
+
+    res <- tryCatch(
       withProgress(message = 'Solving', value = 0.5, {
         res <- if (method == 'p_median') {
           solve_p_median(
@@ -292,6 +303,7 @@ server <- function(input, output, session) {
         NULL
       }
     )
+    if (!is.null(res)) result(res)
   })
 
   output$has_result <- reactive(!is.null(result()))
@@ -305,6 +317,11 @@ server <- function(input, output, session) {
   })
   observeEvent(input$alts_table_rows_selected, {
     updateSelectInput(session, 'alt', selected = input$alts_table_rows_selected)
+  })
+  # and the dropdown moves the highlighted row
+  observeEvent(input$alt, {
+    req(result())
+    selectRows(dataTableProxy('alts_table'), as.integer(input$alt))
   })
 
   # the alternative being viewed, in the same shape the outputs below expect

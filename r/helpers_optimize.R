@@ -13,6 +13,7 @@ library(ROI.plugin.glpk)
 # NULL or empty entries are skipped.
 # rms_category, rms_subcategory, dispatch_category and proqa_case_type need the incident_category_code, incident_subcategory_code,
 # dispatch_category_code and dispatch_case_type_description columns on the matrix, and ems_capability needs ems_unit_capability.
+# min_incident_alarm_dt and max_incident_alarm_dt are the earliest and latest incident_alarm_dt among the incidents in each group.
 get_travel_stats <- function(
   travel_matrix_df,
   filter_by = NA,
@@ -53,6 +54,8 @@ get_travel_stats <- function(
       median_minutes = median(duration_min, na.rm = TRUE),
       p90_minutes = quantile(duration_min, 0.9, na.rm = TRUE),
       mean_distance_m = mean(distance_m, na.rm = TRUE),
+      min_incident_alarm_dt = min(incident_alarm_dt, na.rm = TRUE),
+      max_incident_alarm_dt = max(incident_alarm_dt, na.rm = TRUE),
       .groups = 'drop'
     )
 }

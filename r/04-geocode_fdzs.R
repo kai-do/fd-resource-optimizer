@@ -33,16 +33,33 @@ incident_fdz_df <- incident_address_df[!bad_coords, ] |>
   distinct(incident_number, .keep_all = TRUE) |>
   st_as_sf(coords = c('longitude', 'latitude'), crs = 4326, remove = FALSE) |>
   st_transform(2240) |>
-  st_join(fdz_sf['fdz'], join = st_within, left = TRUE) |>
+  st_join(fdz_sf[c('fdz','station_id')], join = st_within, left = TRUE) |>
   st_drop_geometry() |>
   transmute(
     incident_number,
     incident_alarm_dt = ymd_hms(incident_alarm_dt, tz = 'America/New_York'),
     fdz = fdz.y,
+    station_territory = station_id,
     cad_incident_type_code,
     dispatch_code,
     rms_incident_type_code = incident_type_code,
     rms_source_system = source_system
+  )
+
+# EMS unit capability needed by each dispatch code. Codes are read as text so leading zeros (01C05) are kept.
+# Coded incidents the capability file does not list are 'OTHER'; incidents with no dispatch code stay NA.
+ems_capabilities_df <- read_csv(
+  'datasets/inputs/2026-10-14_ems_unit_capabilities.csv',
+  col_types = cols(.default = col_character())
+) |>
+  distinct(dispatch_code, .keep_all = TRUE)
+
+incident_fdz_df <- incident_fdz_df |>
+  left_join(ems_capabilities_df, by = 'dispatch_code') |>
+  mutate(
+    ems_unit_capability = if_else(
+      is.na(ems_unit_capability) & !is.na(dispatch_code), 'OTHER', ems_unit_capability
+    )
   )
 
 # checks
