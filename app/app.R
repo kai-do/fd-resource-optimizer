@@ -29,16 +29,10 @@ cost_choices <- c(
   '90th Percentile Minutes' = 'p90_minutes'
 )
 
-# the travel matrix is large, so it is read the first time stats are built (not at startup) and then shared across sessions
-matrix_path <- file.path(root, 'app/data/travel_matrix_app.parquet')
-matrix_cache <- new.env()
-get_travel_matrix <- function() {
-  if (is.null(matrix_cache$df)) {
-    matrix_cache$df <- read_parquet(matrix_path) |>
-      mutate(fdz = as.character(fdz)) # factors elsewhere, fdz is joined to polygons and run cards as text
-  }
-  matrix_cache$df
-}
+# everything the app needs is read here, before it starts, and shared across sessions
+# factors elsewhere, fdz is joined to polygons and run cards as text
+travel_matrix_df <- read_parquet(file.path(root, 'app/data/travel_matrix_app.parquet')) |>
+  mutate(fdz = as.character(fdz))
 
 # values for the filter dropdowns, written by r/08-prep_app_data.R so the matrix is not needed to build them
 filter_values <- readRDS(file.path(root, 'app/data/filter_values.rds'))
@@ -191,7 +185,7 @@ server <- function(input, output, session) {
     input$build,
     {
       withProgress(message = 'Building Travel Stats', value = 0.5, {
-        stats <- get_travel_stats(get_travel_matrix(), filters = current_filters())
+        stats <- get_travel_stats(travel_matrix_df, filters = current_filters())
         # zones are limited to the selected agencies, so runs with and without the run card use the same zones
         if (length(input$agency) > 0) {
           agency_fdzs <- fdz_agency_df$fdz[fdz_agency_df$agency %in% input$agency]

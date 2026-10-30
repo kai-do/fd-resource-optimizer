@@ -137,7 +137,7 @@ app_matrix_df <- read_parquet(
   'datasets/outputs/incident_travel_matrix_fdz.parquet',
   col_select = c(
     'source_id', 'dest_id', 'fdz', 'duration_min', 'distance_m', 'rms_source_system',
-    'rms_incident_type_code', 'cad_incident_type_code', 'dispatch_code'
+    'rms_incident_type_code', 'cad_incident_type_code', 'dispatch_code', 'incident_alarm_dt'
   )
 ) |>
   left_join(incident_category_df, by = c('dest_id' = 'incident_number')) |>
