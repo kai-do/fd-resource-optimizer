@@ -1,3 +1,11 @@
+# Install anything missing, including what r/helpers_optimize.R loads
+required_packages <- c(
+  'shiny', 'bslib', 'leaflet', 'DT', 'tidyverse', 'arrow', 'sf', 'htmltools', 'scales',
+  'ompr', 'ompr.roi', 'ROI.plugin.glpk'
+)
+missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing_packages) > 0) install.packages(missing_packages)
+
 library(shiny)
 library(bslib)
 library(leaflet)
@@ -42,6 +50,11 @@ stations_df <- read_parquet(file.path(root, 'app/data/stations.parquet'))
 runcard_df <- read_parquet(file.path(root, 'app/data/runcard_beats.parquet'))
 fdz_agency_df <- runcard_df |> distinct(fdz, agency)
 agency_choices <- sort(unique(fdz_agency_df$agency))
+
+# date limits and clock times for the date and time of day filters, on local time like filter_incidents()
+alarm_date_limits <- as_date(range(with_tz(travel_matrix_df$incident_alarm_dt, 'America/New_York'), na.rm = TRUE))
+time_minutes <- seq(0, 1440, by = 30)
+time_choices <- set_names(time_minutes, sprintf('%02d:%02d', time_minutes %/% 60, time_minutes %% 60))
 
 source_system_choices <- filter_values$source_system
 station_choices <- set_names(stations_df$source_id, paste('Station', stations_df$source_id))
@@ -104,6 +117,17 @@ ui <- page_sidebar(
       'agency', 'FDZ Agency', choices = agency_choices, selected = 'CF', multiple = TRUE,
       options = list(placeholder = 'All')
     ),
+    dateRangeInput(
+      'dates', 'Incident Dates',
+      start = alarm_date_limits[1], end = alarm_date_limits[2],
+      min = alarm_date_limits[1], max = alarm_date_limits[2]
+    ),
+    # a start later than the end wraps past midnight, e.g. 22:00 to 06:00
+    layout_columns(
+      col_widths = c(6, 6), gap = '0.5rem',
+      selectInput('time_start', 'Start Time', time_choices, selected = 0),
+      selectInput('time_end', 'End Time', time_choices, selected = 1440)
+    ),
     actionButton('build', 'Build Travel Stats', class = 'btn-secondary w-100'),
     textOutput('stats_note'),
     hr(),
@@ -122,6 +146,7 @@ ui <- page_sidebar(
       'include', 'Required Stations', choices = station_choices, multiple = TRUE,
       options = list(placeholder = 'None')
     ),
+    checkboxInput('include_baseline', 'Include Baseline (Required Stations Only)', value = FALSE),
     selectizeInput(
       'exclude', 'Excluded Stations', choices = station_choices, multiple = TRUE,
       options = list(placeholder = 'None')
@@ -148,6 +173,29 @@ ui <- page_sidebar(
       'Run Card',
       downloadButton('download_runcard', 'Download CSV', class = 'btn-sm mb-2'),
       DTOutput('runcard_table')
+    ),
+    nav_panel(
+      'Response Stats',
+      div(
+        style = 'overflow-y: auto;',
+        p(
+          class = 'text-muted small mb-2',
+          "Responding stations follow the CAD run card order for each scenario's open stations.",
+          "They do not use the optimizer's assignments."
+        ),
+        layout_columns(
+          col_widths = c(3, 3, 3, 3), fill = FALSE,
+          selectInput('rs_left', 'Left Scenario', choices = NULL),
+          selectInput('rs_right', 'Right Scenario', choices = NULL),
+          selectInput('rs_level', 'Response Level', choices = NULL),
+          div(class = 'pt-4', actionButton('rs_ci', 'Compute 95% CIs', class = 'btn-sm btn-secondary'))
+        ),
+        uiOutput('rs_note'),
+        DTOutput('rs_summary'),
+        uiOutput('rs_unserved'),
+        downloadButton('download_rs', 'Download CSV', class = 'btn-sm my-2'),
+        DTOutput('rs_fdz_table')
+      )
     )
   )
 )
@@ -180,29 +228,40 @@ server <- function(input, output, session) {
     filters
   }
 
-  # travel stats, rebuilt only when the button is pressed (all incidents on startup)
-  travel_stats <- eventReactive(
+  # matching travel matrix rows (every station for each incident), rebuilt only when the button is pressed (all incidents on startup).
+  # Kept at incident level so Response Stats can take medians and percentiles over calls.
+  filtered_incidents <- eventReactive(
     input$build,
     {
-      withProgress(message = 'Building Travel Stats', value = 0.5, {
-        stats <- get_travel_stats(travel_matrix_df, filters = current_filters())
+      withProgress(message = 'Filtering Incidents', value = 0.3, {
+        incidents <- filter_incidents(
+          travel_matrix_df,
+          filters = current_filters(),
+          date_range = input$dates,
+          time_range = as.numeric(c(input$time_start, input$time_end))
+        )
         # zones are limited to the selected agencies, so runs with and without the run card use the same zones
         if (length(input$agency) > 0) {
           agency_fdzs <- fdz_agency_df$fdz[fdz_agency_df$agency %in% input$agency]
-          stats <- stats |> filter(is.na(fdz) | fdz %in% agency_fdzs)
+          incidents <- incidents |> filter(is.na(fdz) | fdz %in% agency_fdzs)
         }
-        stats
+        incidents
       })
     },
     ignoreNULL = FALSE
   )
+
+  travel_stats <- reactive({
+    withProgress(message = 'Building Travel Stats', value = 0.7, summarise_travel_stats(filtered_incidents()))
+  })
 
   output$stats_note <- renderText({
     s <- travel_stats()
     if (nrow(s) == 0) return('No incidents match these filters')
     n_st <- n_distinct(s$source_id)
     n_inc <- s |> filter(!is.na(fdz)) |> distinct(fdz, n_incidents) |> pull(n_incidents) |> sum()
-    paste0(format(n_inc, big.mark = ','), ' Incidents, ', n_st, ' Stations')
+    overnight <- isolate(as.numeric(input$time_start) > as.numeric(input$time_end))
+    paste0(format(n_inc, big.mark = ','), ' Incidents, ', n_st, ' Stations', if (overnight) ' (Overnight Time Window)' else '')
   })
 
   # keep p within the number of candidate stations
@@ -257,6 +316,7 @@ server <- function(input, output, session) {
   result <- reactiveVal(NULL)
   observeEvent(input$run, {
     stats <- travel_stats()
+    incidents <- filtered_incidents()
     method <- input$method
     cost_col <- input$cost_col
     runcard <- if (isTRUE(input$use_runcard)) runcard_df else NULL
@@ -276,21 +336,39 @@ server <- function(input, output, session) {
       return()
     }
 
+    with_baseline <- isTRUE(input$include_baseline)
+    if (with_baseline && length(include) == 0) {
+      showNotification('Include Baseline needs at least one required station, running without it', type = 'warning', duration = 10)
+      with_baseline <- FALSE
+    }
+
+    solve <- function(p, n_solutions) {
+      if (method == 'p_median') {
+        solve_p_median(
+          stats, p = p, cost_col = cost_col,
+          include = include, exclude = exclude, n_solutions = n_solutions, runcard_df = runcard
+        )
+      } else {
+        solve_mclp(
+          stats, p = p, threshold_minutes = input$threshold, cost_col = cost_col,
+          include = include, exclude = exclude, n_solutions = n_solutions, runcard_df = runcard
+        )
+      }
+    }
+    scenario <- function(a, label) {
+      list(res = a, label = label, table = build_table(a, stats, method, cost_col) |> add_zone_stats(stats))
+    }
+
     res <- tryCatch(
       withProgress(message = 'Solving', value = 0.5, {
-        res <- if (method == 'p_median') {
-          solve_p_median(
-            stats, p = input$p, cost_col = cost_col,
-            include = include, exclude = exclude, n_solutions = n_alts, runcard_df = runcard
-          )
-        } else {
-          solve_mclp(
-            stats, p = input$p, threshold_minutes = input$threshold, cost_col = cost_col,
-            include = include, exclude = exclude, n_solutions = n_alts, runcard_df = runcard
-          )
+        res <- solve(input$p, n_alts)
+        alts <- imap(res$alternatives, \(a, k) scenario(a, paste0('Alternative ', k, if (k == 1) ' (Best)' else '')))
+        # the required stations on their own: p equal to their count leaves no other station to open
+        if (with_baseline) {
+          alts <- c(list(scenario(solve(length(include), 1), 'Baseline')), alts)
         }
-        alts <- map(res$alternatives, \(a) list(res = a, table = build_table(a, stats, method, cost_col) |> add_zone_stats(stats)))
-        list(method = method, alts = alts)
+        # incidents are kept so Response Stats uses the same calls the optimizer did
+        list(method = method, alts = alts, best = if (with_baseline) 2L else 1L, incidents = incidents)
       }),
       error = function(e) {
         showNotification(conditionMessage(e), type = 'error', duration = 10)
@@ -305,9 +383,9 @@ server <- function(input, output, session) {
 
   # alternative selector follows each run, and clicking a row in the Alternatives tab picks it
   observeEvent(result(), {
-    n <- length(result()$alts)
-    labels <- paste('Alternative', seq_len(n), c('(Best)', rep('', n - 1)))
-    updateSelectInput(session, 'alt', choices = set_names(seq_len(n), trimws(labels)), selected = 1)
+    r <- result()
+    labels <- map_chr(r$alts, 'label')
+    updateSelectInput(session, 'alt', choices = set_names(seq_along(labels), labels), selected = r$best)
   })
   observeEvent(input$alts_table_rows_selected, {
     updateSelectInput(session, 'alt', selected = input$alts_table_rows_selected)
@@ -325,29 +403,33 @@ server <- function(input, output, session) {
     c(list(method = r$method), r$alts[[idx]])
   })
 
-  # one row per alternative, best first
+  # one row per scenario, the baseline (if run) and then the alternatives best first
   alts_summary <- reactive({
     r <- req(result())
+    labels <- map_chr(r$alts, 'label')
     stations_txt <- map_chr(r$alts, \(a) paste(a$res$open_stations, collapse = ', '))
     if (r$method == 'p_median') {
       objective <- map_dbl(r$alts, \(a) a$res$objective)
       tibble(
-        Rank = seq_along(objective),
+        Scenario = labels,
         `Total Weighted Minutes` = round(objective),
-        `Difference vs Best` = round(objective - objective[1]),
+        `Difference vs Best` = round(objective - objective[r$best]),
         `Open Stations` = stations_txt
       )
     } else {
       covered <- map_dbl(r$alts, \(a) a$res$covered_demand)
       tibble(
-        Rank = seq_along(covered),
+        Scenario = labels,
         `Demand Covered` = scales::percent(map_dbl(r$alts, \(a) a$res$pct_covered), accuracy = 0.1),
         `Incidents Covered` = covered,
-        `Difference vs Best` = covered - covered[1],
+        `Difference vs Best` = covered - covered[r$best],
         `Open Stations` = stations_txt
       )
     }
   })
+
+  # file name piece for the scenario being viewed, e.g. alternative_1_best or baseline
+  scenario_slug <- function(label) str_replace_all(str_to_lower(label), '[^a-z0-9]+', '_') |> str_remove_all('^_|_$')
 
   # table with display column names, shared by the Assignments tab and the CSV download
   display_table <- reactive({
@@ -434,7 +516,7 @@ server <- function(input, output, session) {
   output$alts_table <- renderDT({
     datatable(
       alts_summary(), rownames = FALSE, fillContainer = TRUE,
-      selection = list(mode = 'single', selected = 1)
+      selection = list(mode = 'single', selected = result()$best)
     )
   })
 
@@ -454,15 +536,140 @@ server <- function(input, output, session) {
   output$download_runcard <- downloadHandler(
     filename = function() {
       r <- tryCatch(result(), error = \(e) NULL)
-      label <- if (is.null(r)) 'all_stations' else paste0('alternative_', current()$res$rank)
+      label <- if (is.null(r)) 'all_stations' else scenario_slug(current()$label)
       paste0('run_card_', label, '_', Sys.Date(), '.csv')
     },
     content = function(file) write_csv(runcard_table(), file, na = '')
   )
 
   output$download <- downloadHandler(
-    filename = function() paste0('assignments_alternative_', current()$res$rank, '_', Sys.Date(), '.csv'),
+    filename = function() paste0('assignments_', scenario_slug(current()$label), '_', Sys.Date(), '.csv'),
     content = function(file) write_csv(display_table(), file)
+  )
+
+  # Response Stats: two scenarios compared at one run card response level.
+  # Stations come from runcard_responders() on each scenario's open stations, never from the optimizer's assignments.
+  observeEvent(result(), {
+    r <- result()
+    choices <- set_names(seq_along(r$alts), map_chr(r$alts, 'label'))
+    has_baseline <- r$alts[[1]]$label == 'Baseline'
+    updateSelectInput(session, 'rs_left', choices = choices, selected = if (has_baseline) 1L else r$best)
+    updateSelectInput(session, 'rs_right', choices = choices, selected = r$best)
+  })
+
+  rs_scenarios <- reactive({
+    r <- req(result())
+    idx <- as.integer(c(req(input$rs_left), req(input$rs_right)))
+    req(all(idx %in% seq_along(r$alts)))
+    r$alts[idx]
+  })
+
+  # levels go up to the larger station count, the side with fewer stations shows its zones as having no responder
+  observeEvent(rs_scenarios(), {
+    n <- max(map_int(rs_scenarios(), \(a) length(a$res$open_stations)))
+    choices <- set_names(seq_len(n), due_label(seq_len(n)))
+    selected <- if (isTruthy(input$rs_level) && as.integer(input$rs_level) <= n) input$rs_level else 1L
+    updateSelectInput(session, 'rs_level', choices = choices, selected = selected)
+  })
+
+  rs_compare <- reactive({
+    sides <- rs_scenarios()
+    k <- as.integer(req(input$rs_level))
+    withProgress(message = 'Computing Response Stats', value = 0.5, {
+      compare_runcard_response(
+        req(result())$incidents, runcard_df,
+        sides[[1]]$res$open_stations, sides[[2]]$res$open_stations, k
+      )
+    })
+  })
+
+  # confidence intervals are slow, so they wait for the button and are cleared when the comparison changes
+  rs_ci <- reactiveVal(NULL)
+  observeEvent(rs_compare(), rs_ci(NULL))
+  observeEvent(input$rs_ci, {
+    paired <- rs_compare()$paired
+    if (nrow(paired) == 0) {
+      showNotification('No paired calls to resample', type = 'error', duration = 10)
+      return()
+    }
+    rs_ci(withProgress(message = 'Bootstrapping 95% CIs', value = 0.5, bootstrap_response_diff(paired)))
+  })
+
+  output$rs_note <- renderUI({
+    if (is.null(result())) p(class = 'text-muted', 'Run the optimizer to compare scenarios.')
+  })
+
+  output$rs_summary <- renderDT({
+    cmp <- rs_compare()
+    sides <- rs_scenarios()
+    ci <- rs_ci()
+    stat_labels <- c(calls = 'Calls', mean = 'Mean Minutes', median = 'Median Minutes', p90 = '90th Percentile Minutes')
+    table <- cmp$summary |>
+      left_join(ci %||% tibble(stat = character(), lower = numeric(), upper = numeric()), by = 'stat') |>
+      transmute(
+        Statistic = stat_labels[stat],
+        left = round(left, 2),
+        right = round(right, 2),
+        Difference = round(difference, 2),
+        `Difference 95% CI` = if_else(is.na(lower), '', sprintf('[%.2f, %.2f]', lower, upper))
+      )
+    names(table)[2:3] <- paste0(c('Left: ', 'Right: '), map_chr(sides, 'label'))
+    datatable(table, rownames = FALSE, options = list(dom = 't', ordering = FALSE))
+  })
+
+  output$rs_unserved <- renderUI({
+    cmp <- rs_compare()
+    sides <- rs_scenarios()
+    level <- due_label(as.integer(input$rs_level))
+    lines <- map2(c('Left', 'Right'), seq_len(2), \(side, i) {
+      u <- cmp$unserved[i, ]
+      paste0(
+        side, ' (', sides[[i]]$label, '): ', u$zones, ' zones / ', format(u$calls, big.mark = ','),
+        ' calls have no ', level, ' station on the run card.'
+      )
+    })
+    div(
+      class = 'text-muted small mt-2',
+      map(lines, p, class = 'mb-1'),
+      p(class = 'mb-1', paste0('Differences are right minus left over ', format(nrow(cmp$paired), big.mark = ','), ' calls served on both sides.')),
+      if (!is.null(rs_ci())) p(class = 'mb-1', 'CIs resample whole FDZs (1,000 draws). Travel times are model estimates, so they reflect which calls occurred, not travel time variation.')
+    )
+  })
+
+  rs_fdz_display <- reactive({
+    cmp <- rs_compare()
+    other_first <- runcard_df |> distinct(fdz, other_agency_first) |> group_by(fdz) |> summarise(other_agency_first = any(other_agency_first))
+    cmp$by_fdz |>
+      left_join(other_first, by = 'fdz') |>
+      transmute(
+        FDZ = fdz,
+        `Left Station` = left_station,
+        `Right Station` = right_station,
+        `Other Agency First Due` = if_else(other_agency_first %in% TRUE, 'Yes', ''),
+        Calls = calls,
+        `Left Mean` = left_mean, `Right Mean` = right_mean, `Diff Mean` = diff_mean,
+        `Left Median` = left_median, `Right Median` = right_median, `Diff Median` = diff_median,
+        `Left P90` = left_p90, `Right P90` = right_p90, `Diff P90` = diff_p90
+      ) |>
+      mutate(across(c(`Left Mean`:`Diff P90`), \(x) round(x, 2)))
+  })
+
+  output$rs_fdz_table <- renderDT({
+    datatable(
+      rs_fdz_display(), rownames = FALSE,
+      options = list(scrollX = TRUE, pageLength = 25)
+    )
+  })
+
+  output$download_rs <- downloadHandler(
+    filename = function() {
+      sides <- rs_scenarios()
+      paste0(
+        'response_stats_', scenario_slug(sides[[1]]$label), '_vs_', scenario_slug(sides[[2]]$label),
+        '_', str_remove(str_to_lower(due_label(as.integer(input$rs_level))), ' due'), '_due_', Sys.Date(), '.csv'
+      )
+    },
+    content = function(file) write_csv(rs_fdz_display(), file, na = '')
   )
 }
 

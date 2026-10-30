@@ -34,3 +34,10 @@ filter_runcard <- function(
     ungroup() |>
     filter(adjusted_response_sequence %in% included_response_sequences)
 }
+
+
+
+get_travel_stats
+
+test_df <- filter_runcard(runcard_df, c(1,2,3,4,5,6,7,8,9,10))
+get_travel_stats()
