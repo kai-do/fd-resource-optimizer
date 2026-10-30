@@ -24,7 +24,7 @@ source("./r/transition_helpers.R")
 ```{r}
 #| label: load
 deploy_df <- read_csv(
-  "./datasets/inputs/2026-10-05_deployment_analysis_phase_1.csv",
+  "./datasets/tutorial/2026-10-05_deployment_analysis_phase_1.csv",
   na = "NULL",
   show_col_types = FALSE
 )

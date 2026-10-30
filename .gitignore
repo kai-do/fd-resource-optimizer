@@ -13,7 +13,7 @@ datasets/**/*travel_matrix*.csv
 
 # Large SQL exports in inputs/ (>50 MB)
 datasets/inputs/2026-10-13_incident_address_data.csv
-datasets/inputs/2026-10-05_deployment_analysis_phase_1.csv
+datasets/tutorial/2026-10-05_deployment_analysis_phase_1.csv
 
 # Any spreadsheet export
 datasets/**/*.xlsx
