@@ -11,11 +11,11 @@ options(
 # osrm-routed must be started with --max-table-size >= chunk_size + number of stations
 chunk_size <- 900
 
-station_df <- read.csv("datasets/stations.csv", stringsAsFactors = FALSE)
-address_df <- read.csv("datasets/addresses.csv", stringsAsFactors = FALSE) |>
+station_df <- read.csv("datasets/archive/stations.csv", stringsAsFactors = FALSE)
+address_df <- read.csv("datasets/archive/addresses.csv", stringsAsFactors = FALSE) |>
   distinct(siteaddid, .keep_all = TRUE)
-fdz_df <- read.csv("datasets/fdzs.csv", stringsAsFactors = FALSE)
-cad_address_df <- read.csv("datasets/2026-03-16_cad_incident_locations.csv", stringsAsFactors = FALSE) |>
+fdz_df <- read.csv("datasets/archive/fdzs.csv", stringsAsFactors = FALSE)
+cad_address_df <- read.csv("datasets/archive/2026-03-16_cad_incident_locations.csv", stringsAsFactors = FALSE) |>
   distinct(IncidentNumber, .keep_all = TRUE)
 
 # CAD exports some incidents at (0, 0); OSRM would snap these to the edge of the map
@@ -116,13 +116,13 @@ od_long <- cad_od |>
          incident_number, cad_incident_key, incident_lat, incident_long, incident_shape,
          fdz_station, firedemandzone, fdz, distance_m, duration_min, snap_dist_m)
 
-write_csv(od_long, "datasets/cad_incident_travel_matrix.csv", na = "")
+write_csv(od_long, "datasets/outputs/cad_incident_travel_matrix.csv", na = "")
 
 
 od_long_minimal <- od_long |>
   select(station_id, incident_number, fdz, distance_m, duration_min, snap_dist_m)
 
-write_csv(od_long_minimal, "datasets/cad_incident_travel_matrix_minimal.csv", na = "")
+write_csv(od_long_minimal, "datasets/outputs/cad_incident_travel_matrix_minimal.csv", na = "")
 
 
 ### All Addresses
@@ -142,10 +142,10 @@ od_long <- address_od |>
          dest_address_id, dest_address, dest_shape, dest_shape_2240,
          distance_m, duration_min, snap_dist_m)
 
-write_csv(od_long, "datasets/travel_matrix.csv", na = "")
+write_csv(od_long, "datasets/outputs/travel_matrix.csv", na = "")
 
 
 od_long_minimal <- od_long |>
   select(station_id, dest_address_id, distance_m, duration_min, snap_dist_m)
 
-write_csv(od_long_minimal, "datasets/travel_matrix_minimal.csv", na = "")
+write_csv(od_long_minimal, "datasets/outputs/travel_matrix_minimal.csv", na = "")

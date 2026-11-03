@@ -41,3 +41,6 @@ legacy/app/data/*
 
 # Phase 0 baseline outputs (incident-level, local only)
 _baseline/
+# Rendered tutorial output (built from incident-level data) and Quarto cache
+legacy/tutorials/deployment_analysis_phase_1.html
+.quarto/

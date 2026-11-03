@@ -6,6 +6,9 @@ format:
     toc: true
     embed-resources: true
     code-tools: true
+knitr:
+  opts_knit:
+    root.dir: "../.." # run code from the repo root so the relative paths below resolve
 execute:
   warning: false
   message: false
@@ -25,7 +28,7 @@ source("./legacy/R/transition_helpers.R")
 ```{r}
 #| label: load
 deploy_df <- read_csv(
-  "./datasets/tutorial/2026-10-05_deployment_analysis_phase_1.csv",
+  "./datasets/inputs/2026-10-05_deployment_analysis_phase_1.csv",
   na = "NULL",
   show_col_types = FALSE
 )

@@ -38,7 +38,11 @@ incident_fdz_df <- incident_address_df[!bad_coords, ] |>
   st_drop_geometry() |>
   transmute(
     incident_number,
-    incident_alarm_dt = ymd_hms(incident_alarm_dt, tz = 'America/New_York'),
+    # fread() already reads this as POSIXct (local clock time labelled UTC), so relabel it rather than re-parse:
+    # ymd_hms() on POSIXct formats it to text first, and exact-midnight alarms ("2025-01-05") then fail to parse.
+    # Clock times in the spring-forward gap (2021-03-14 02:54) don't exist in New York time; roll them forward.
+    # Every other time, including the repeated fall-back hour, comes out the same as ymd_hms(tz =) gave.
+    incident_alarm_dt = force_tz(incident_alarm_dt, 'America/New_York', roll_dst = c('post', 'post')),
     fdz = fdz.y,
     station_territory = station_id,
     cad_incident_type_code,
@@ -65,6 +69,7 @@ incident_fdz_df <- incident_fdz_df |>
 
 # checks
 stopifnot(!anyDuplicated(incident_fdz_df$incident_number)) # no duplicated rows from overlapping FDZs
+stopifnot(!anyNA(incident_fdz_df$incident_alarm_dt)) # every alarm time parsed
 sum(is.na(incident_fdz_df$fdz)) # points that fell in no FDZ
 
 # Attach to the existing matrix (dest_id is incident_number)
