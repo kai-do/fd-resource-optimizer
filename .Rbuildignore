@@ -19,3 +19,4 @@
 ^\.Renviron$
 ^\.Renviron\.example$
 ^[.]?air[.]toml$
+^\.lintr$

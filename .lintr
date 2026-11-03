@@ -1,0 +1,28 @@
+linters: linters_with_defaults(
+    # Layout is owned by Air (air.toml). These linters check the same layout
+    # rules Air rewrites, or disagree with Air's output (e.g. commas_linter vs
+    # x[, , k]; indentation_linter vs Air's argument hugging), so they are off.
+    brace_linter = NULL,
+    commas_linter = NULL,
+    function_left_parentheses_linter = NULL,
+    indentation_linter = NULL,
+    infix_spaces_linter = NULL,
+    paren_body_linter = NULL,
+    pipe_continuation_linter = NULL,
+    spaces_inside_linter = NULL,
+    spaces_left_parentheses_linter = NULL,
+    trailing_blank_lines_linter = NULL,
+    trailing_whitespace_linter = NULL,
+    whitespace_linter = NULL
+    # Kept: line_length_linter (Air cannot wrap long strings or comments),
+    # quotes, assignment, naming, usage and the other non-layout linters.
+  )
+exclusions: list(
+    "legacy",
+    "dev",
+    "archive",
+    "renv",
+    "_baseline",
+    "datasets"
+  )
+encoding: "UTF-8"
