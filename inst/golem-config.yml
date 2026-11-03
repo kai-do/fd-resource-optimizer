@@ -2,6 +2,18 @@ default:
   golem_name: fdresopt
   golem_version: 0.0.0.9000
   app_prod: no
+  # Paths and services. Machine-specific values come from environment
+  # variables set in .Renviron (gitignored; see .Renviron.example). Relative
+  # paths are relative to the repo root. Only the key names and fallbacks live
+  # here; nothing in this file is secret or machine-specific.
+  data_inputs_dir: !expr Sys.getenv("FDRO_DATA_INPUTS_DIR", "datasets/inputs")
+  data_outputs_dir: !expr Sys.getenv("FDRO_DATA_OUTPUTS_DIR", "datasets/outputs")
+  app_data_dir: !expr Sys.getenv("FDRO_APP_DATA_DIR", "datasets/app")
+  osrm_host: !expr Sys.getenv("FDRO_OSRM_HOST", "127.0.0.1")
+  osrm_port: !expr Sys.getenv("FDRO_OSRM_PORT", "5000")
+  osrm_profile: car
+  osrm_graph: !expr Sys.getenv("FDRO_OSRM_GRAPH")
+  osrm_bin: !expr Sys.getenv("FDRO_OSRM_BIN")
 production:
   app_prod: yes
 dev:

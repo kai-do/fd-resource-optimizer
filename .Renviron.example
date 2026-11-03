@@ -1,0 +1,25 @@
+# Copy this file to .Renviron (gitignored) and fill in the values for this
+# machine. R reads .Renviron from the project root at startup; restart R after
+# editing. inst/golem-config.yml reads these variables, and falls back to the
+# defaults shown here when a variable is unset.
+
+# OSRM (local Windows binary, not Docker)
+FDRO_OSRM_BIN=C:/path/to/osrm-routed.exe
+# Prepared MLD graph: the .osrm path (the .osrm.mldgr etc. sit next to it)
+FDRO_OSRM_GRAPH=C:/path/to/georgia-latest.osrm
+FDRO_OSRM_HOST=127.0.0.1
+FDRO_OSRM_PORT=5000
+
+# Data directories (relative to the repo root, or absolute)
+FDRO_DATA_INPUTS_DIR=datasets/inputs
+FDRO_DATA_OUTPUTS_DIR=datasets/outputs
+FDRO_APP_DATA_DIR=datasets/app
+
+# Which golem-config.yml section to use: default, production or dev
+# GOLEM_CONFIG_ACTIVE=default
+
+# Database credentials, if new code ever queries CAD/RMS directly (the legacy
+# SQL is run by hand on the agency network). Never put real values in this
+# example file.
+# FDRO_SQL_SERVER=
+# FDRO_SQL_DATABASE=
