@@ -44,6 +44,11 @@ usethis::use_data_raw(name = "my_dataset", open = FALSE)
 ## Add one line by test you want to create
 usethis::use_test("app")
 
+## Lint ----
+## Formatting is Air's job (air.toml; `air format .` or format-on-save).
+## lintr checks the rest; legacy/ and archive/ are excluded in .lintr.
+lintr::lint_package()
+
 # Documentation
 
 ## Vignette ----

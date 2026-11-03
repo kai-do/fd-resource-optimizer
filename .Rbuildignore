@@ -1,3 +1,5 @@
+^renv$
+^renv\.lock$
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^\.vscode$
@@ -20,3 +22,7 @@
 ^\.Renviron\.example$
 ^[.]?air[.]toml$
 ^\.lintr$
+^renv$
+^renv\.lock$
+^\.Rprofile$
+^\.renvignore$
