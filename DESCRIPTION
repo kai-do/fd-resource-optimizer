@@ -1,0 +1,13 @@
+Package: fdresopt
+Title: Fire Station Deployment and Resource Placement
+Version: 0.0.0.9000
+Authors@R: 
+    person("Nakai", "Zemer", , "n@kai.do", role = c("aut", "cre"))
+Description: Drive-time summaries by fire demand zone and station-placement optimization (p-median and maximal covering location problems) for Cobb County Fire, with a 'shiny' application for comparing deployment scenarios.
+License: MIT + file LICENSE
+Imports: 
+    config,
+    golem,
+    shiny
+Encoding: UTF-8
+RoxygenNote: 7.1.1

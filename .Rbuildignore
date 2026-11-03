@@ -1,0 +1,20 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.vscode$
+^dev$
+^run_dev.*
+^\.here$
+^LICENSE\.md$
+^README\.Rmd$
+# Never part of the package build: quarantined code, archive, data, analysis, baseline
+^legacy$
+^archive$
+^datasets$
+^_baseline$
+^analysis$
+^reports$
+# Directory READMEs (R CMD check rejects non-.R files in R/)
+^R/README\.md$
+# Local config and environment
+^\.Renviron$
+^\.Renviron\.example$
