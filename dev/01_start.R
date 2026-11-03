@@ -19,18 +19,18 @@
 ## to change the name in the app_sys() function in app_config.R /!\
 ##
 golem::fill_desc(
-	pkg_name = "fdresopt", # The name of the golem package containing the app (typically lowercase, no underscore or periods)
-	pkg_title = "Fire Station Deployment and Resource Placement", # What the Package Does (One Line, Title Case, No Period)
-	pkg_description = "Drive-time summaries by fire demand zone and station-placement optimization (p-median and maximal covering location problems) for Cobb County Fire, with a shiny application for comparing deployment scenarios.", # What the package does (one paragraph).
-	authors = person(
-		given = "Nakai", # Your First Name
-		family = "Zemer", # Your Last Name
-		email = "n@kai.do", # Your email
-		role = c("aut", "cre") # Your role (here author/creator)
-	),
-	repo_url = NULL, # The URL of the GitHub repo (optional),
-	pkg_version = "0.0.0.9000", # The version of the package containing the app
-	set_options = TRUE # Set the global golem options
+  pkg_name = "fdresopt", # The name of the golem package containing the app (typically lowercase, no underscore or periods)
+  pkg_title = "Fire Station Deployment and Resource Placement", # What the Package Does (One Line, Title Case, No Period)
+  pkg_description = "Drive-time summaries by fire demand zone and station-placement optimization (p-median and maximal covering location problems) for Cobb County Fire, with a shiny application for comparing deployment scenarios.", # What the package does (one paragraph).
+  authors = person(
+    given = "Nakai", # Your First Name
+    family = "Zemer", # Your Last Name
+    email = "n@kai.do", # Your email
+    role = c("aut", "cre") # Your role (here author/creator)
+  ),
+  repo_url = NULL, # The URL of the GitHub repo (optional),
+  pkg_version = "0.0.0.9000", # The version of the package containing the app
+  set_options = TRUE # Set the global golem options
 )
 
 ## Install the required dev dependencies ----
@@ -64,8 +64,8 @@ golem::use_utils_server(with_test = TRUE)
 usethis::use_git()
 ## Sets the remote associated with 'name' to 'url'
 usethis::use_git_remote(
-	name = "origin",
-	url = "https://github.com/<OWNER>/<REPO>.git"
+  name = "origin",
+  url = "https://github.com/<OWNER>/<REPO>.git"
 )
 
 # You're now set! ----

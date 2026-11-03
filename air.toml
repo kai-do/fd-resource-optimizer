@@ -1,0 +1,7 @@
+# Air formatter config (https://posit-dev.github.io/air/configuration.html).
+# legacy/ and archive/ are never formatted: legacy code moves verbatim and the
+# archive is read-only. Leading "/" anchors each path to the repo root.
+# default-exclude keeps Air's built-in excludes (.git/, renv/, ...).
+[format]
+exclude = ["/legacy/", "/archive/"]
+default-exclude = true

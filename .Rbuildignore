@@ -18,3 +18,4 @@
 # Local config and environment
 ^\.Renviron$
 ^\.Renviron\.example$
+^[.]?air[.]toml$
