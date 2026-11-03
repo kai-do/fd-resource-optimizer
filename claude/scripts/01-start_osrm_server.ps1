@@ -1,12 +1,12 @@
 # Runs osrm-routed directly (no R process). Stop with Ctrl+C.
-#   powershell -File scripts\01-start_osrm_server.ps1
+#   powershell -File claude\scripts\01-start_osrm_server.ps1
 # Override defaults with parameters, e.g. -Port 5001
 
 param(
   [string]$OsrmBin = "C:/Users/ZemerN036438/AppData/Local/R/cache/R/osrm.backend/v26.10.0/osrm-routed.exe",
   [string]$Graph = "C:/OSMData/2026-10-13/georgia-261012.osrm",
   [int]$Port = 5000,
-  # must be >= chunk_size (900) + number of stations in r/route_matrix.R
+  # must be >= chunk_size (900) + number of stations in claude/r/03-generate_travel_matrix.R
   [int]$MaxTableSize = 1500
 )
 

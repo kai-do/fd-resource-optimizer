@@ -1,7 +1,7 @@
 library(tidyverse)
 library(arrow)
 
-source('r/helpers_optimize.R') # solve_mclp()
+source('claude/r/helpers_optimize.R') # solve_mclp()
 
 # source data for the coverage matrix and demand weights
 travel_stats_df <- read_parquet('datasets/outputs/travel_stats.parquet')

@@ -1,4 +1,4 @@
-source("r/02-build_travel_matrix.R")
+source("claude/r/02-build_travel_matrix.R")
 library(data.table)
 library(arrow)
 

@@ -50,4 +50,4 @@ The script drops CAD incidents with missing or `(0, 0)` coordinates before routi
 
 ## Shiny app
 
-Run `r/08-prep_app_data.R` once, then `shiny::runApp('app')` from the repo root. Needs shiny, bslib, leaflet, DT in addition to the pipeline packages.
+Run `claude/r/08-prep_app_data.R` once, then `shiny::runApp('app')` from the repo root. Needs shiny, bslib, leaflet, DT in addition to the pipeline packages.

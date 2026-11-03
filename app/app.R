@@ -1,4 +1,4 @@
-# Install anything missing, including what r/helpers_optimize.R loads
+# Install anything missing, including what claude/r/helpers_optimize.R loads
 required_packages <- c(
   'shiny', 'bslib', 'leaflet', 'DT', 'tidyverse', 'arrow', 'sf', 'htmltools', 'scales',
   'ompr', 'ompr.roi', 'ROI.plugin.glpk', 'openxlsx'
@@ -16,7 +16,7 @@ library(sf)
 
 # Run from the repo root with shiny::runApp('app'); paths resolve either way
 root <- if (dir.exists('datasets')) '.' else '..'
-source(file.path(root, 'r/helpers_optimize.R'))
+source(file.path(root, 'claude/r/helpers_optimize.R'))
 
 # One multi-select per filter. Columns are on the travel matrix, selections are combined (AND).
 # Descriptions for category and subcategory already start with the code, so they are not prefixed again.
@@ -42,7 +42,7 @@ cost_choices <- c(
 travel_matrix_df <- read_parquet(file.path(root, 'app/data/travel_matrix_app.parquet')) |>
   mutate(fdz = as.character(fdz))
 
-# values for the filter dropdowns, written by r/08-prep_app_data.R so the matrix is not needed to build them
+# values for the filter dropdowns, written by claude/r/08-prep_app_data.R so the matrix is not needed to build them
 filter_values <- readRDS(file.path(root, 'app/data/filter_values.rds'))
 dispatch_capability_df <- filter_values$dispatch_capability
 fdz_polygons_sf <- readRDS(file.path(root, 'app/data/fdz_polygons.rds'))

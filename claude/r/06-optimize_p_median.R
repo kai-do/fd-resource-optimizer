@@ -1,7 +1,7 @@
 library(tidyverse)
 library(arrow)
 
-source('r/helpers_optimize.R') # solve_p_median()
+source('claude/r/helpers_optimize.R') # solve_p_median()
 
 # source data for the cost matrix and demand weights
 travel_stats_df <- read_parquet('datasets/outputs/travel_stats.parquet')

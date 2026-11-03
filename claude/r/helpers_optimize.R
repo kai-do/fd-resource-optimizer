@@ -33,16 +33,41 @@ get_travel_stats <- function(
 }
 
 # The travel matrix rows (every station for each incident) that match `filters`, see get_travel_stats().
-# date_range is two Dates, both ends kept, on the local (America/New_York) date of incident_alarm_dt.
-# time_range is two clock times in minutes since midnight (0-1440), start kept and end dropped, on the local time of day.
-# A start later than the end wraps past midnight (e.g. 1320, 360 is 22:00-06:00), and equal times keep the whole day.
-# NULL skips that filter.
+# Same arguments as filter_incident_level(), which picks the incidents; this keeps all of their station rows.
 filter_incidents <- function(
   travel_matrix_df,
   filters = NULL,
   date_range = NULL,
   time_range = NULL
 ) {
+  incidents_df <- filter_incident_level(
+    travel_matrix_df,
+    filters = filters,
+    date_range = date_range,
+    time_range = time_range
+  )
+
+  travel_matrix_df |>
+    filter(dest_id %in% incidents_df$dest_id)
+}
+
+# The incidents that match `filters`, one row per incident (dest_id), see get_travel_stats().
+# The travel matrix has a row per station for each incident, so the station columns (source_id, duration_min, distance_m)
+# are dropped, leaving the incident columns (fdz, codes, incident_alarm_dt, ...).
+# date_range is two Dates, both ends kept, on the local (America/New_York) date of incident_alarm_dt.
+# time_range is two clock times in minutes since midnight (0-1440), start kept and end dropped, on the local time of day.
+# A start later than the end wraps past midnight (e.g. 1320, 360 is 22:00-06:00), and equal times keep the whole day.
+# NULL skips that filter.
+filter_incident_level <- function(
+  travel_matrix_df,
+  filters = NULL,
+  date_range = NULL,
+  time_range = NULL
+) {
+  # every incident column is the same on all of an incident's rows, so the first row stands for the incident
+  travel_matrix_df <- travel_matrix_df[!duplicated(travel_matrix_df$dest_id), ] |>
+    select(-any_of(c('source_id', 'duration_min', 'distance_m')))
+
   filter_cols <- c(
     source_system = 'rms_source_system',
     rms_category = 'incident_category_code',
@@ -494,7 +519,7 @@ solve_mclp <- function(
 }
 
 # The selected stations on each fdz's run card, in card order, one row per fdz and station with its response position (due).
-# Mirrors filter_runcard() in r/filter_runcard.R: stations that are not selected are dropped and the order is renumbered,
+# Mirrors filter_runcard() in claude/r/filter_runcard.R: stations that are not selected are dropped and the order is renumbered,
 # so due 1 is the first selected station on the card. Works on the app's runcard_beats data (fdz, station, rank).
 # There is no fallback: a zone whose card has fewer selected stations than a position has no row for that position.
 # This is the operational order, not the optimizer's, which also falls back to cost order (see runcard_order()).
