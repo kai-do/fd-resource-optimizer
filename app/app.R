@@ -1,7 +1,7 @@
 # Install anything missing, including what r/helpers_optimize.R loads
 required_packages <- c(
   'shiny', 'bslib', 'leaflet', 'DT', 'tidyverse', 'arrow', 'sf', 'htmltools', 'scales',
-  'ompr', 'ompr.roi', 'ROI.plugin.glpk'
+  'ompr', 'ompr.roi', 'ROI.plugin.glpk', 'openxlsx'
 )
 missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing_packages) > 0) install.packages(missing_packages)
@@ -52,7 +52,12 @@ fdz_agency_df <- runcard_df |> distinct(fdz, agency)
 agency_choices <- sort(unique(fdz_agency_df$agency))
 
 # date limits and clock times for the date and time of day filters, on local time like filter_incidents()
-alarm_date_limits <- as_date(range(with_tz(travel_matrix_df$incident_alarm_dt, 'America/New_York'), na.rm = TRUE))
+alarm_dates <- sort(unique(as_date(with_tz(travel_matrix_df$incident_alarm_dt, 'America/New_York'))))
+alarm_date_limits <- range(alarm_dates)
+# a stray early record (one 2002 call before the data starts in 2018) would stretch the per year figures, so the default start
+# is the first date after the last gap of more than 30 days. Earlier dates can still be picked.
+alarm_gaps <- which(diff(alarm_dates) > 30)
+default_start_date <- alarm_dates[if (length(alarm_gaps) > 0) max(alarm_gaps) + 1 else 1]
 time_minutes <- seq(0, 1440, by = 30)
 time_choices <- set_names(time_minutes, sprintf('%02d:%02d', time_minutes %/% 60, time_minutes %% 60))
 
@@ -119,7 +124,7 @@ ui <- page_sidebar(
     ),
     dateRangeInput(
       'dates', 'Incident Dates',
-      start = alarm_date_limits[1], end = alarm_date_limits[2],
+      start = default_start_date, end = alarm_date_limits[2],
       min = alarm_date_limits[1], max = alarm_date_limits[2]
     ),
     # a start later than the end wraps past midnight, e.g. 22:00 to 06:00
@@ -138,10 +143,8 @@ ui <- page_sidebar(
     ),
     numericInput('p', 'Number of Stations (p)', value = 10, min = 1, step = 1),
     selectInput('cost_col', 'Travel Time Statistic', cost_choices),
-    conditionalPanel(
-      "input.method == 'mclp'",
-      numericInput('threshold', 'Coverage Threshold (Minutes)', value = 6, min = 0, step = 0.5)
-    ),
+    # shown for both methods, the Response Stats workbook uses it for its % within columns
+    numericInput('threshold', 'Coverage Threshold (Minutes)', value = 6, min = 0, step = 0.5),
     selectizeInput(
       'include', 'Required Stations', choices = station_choices, multiple = TRUE,
       options = list(placeholder = 'None')
@@ -193,8 +196,32 @@ ui <- page_sidebar(
         uiOutput('rs_note'),
         DTOutput('rs_summary'),
         uiOutput('rs_unserved'),
-        downloadButton('download_rs', 'Download CSV', class = 'btn-sm my-2'),
+        div(
+          class = 'd-flex align-items-center gap-3 my-2',
+          downloadButton('download_rs', 'Download CSV', class = 'btn-sm'),
+          downloadButton('download_rs_xlsx', 'Download Excel (All Scenarios)', class = 'btn-sm'),
+          tagAppendAttributes(checkboxInput('rs_xlsx_ci', 'Include 95% CIs (Slower)', value = FALSE), class = 'mb-0')
+        ),
         DTOutput('rs_fdz_table')
+      )
+    ),
+    nav_panel(
+      'Call Data',
+      div(
+        style = 'overflow-y: auto;',
+        p(
+          class = 'text-muted small mb-2',
+          "One row per call with each scenario's 1st due station on the run card, its travel minutes and distance.",
+          'A blank station means the zone has no open station on its card. Calls with travel minutes in both of two scenarios',
+          "are that pair's Calls Compared in the Response Stats workbook. Calls outside any FDZ are left out, as in every stat."
+        ),
+        uiOutput('calls_note'),
+        div(
+          class = 'd-flex align-items-center gap-3 my-2',
+          downloadButton('download_calls_csv', 'Download CSV', class = 'btn-sm'),
+          downloadButton('download_calls_xlsx', 'Download Excel', class = 'btn-sm')
+        ),
+        DTOutput('calls_scenarios')
       )
     )
   )
@@ -248,6 +275,18 @@ server <- function(input, output, session) {
         incidents
       })
     },
+    ignoreNULL = FALSE
+  )
+
+  # the selections behind filtered_incidents(), captured on the same button press so later edits do not change them
+  build_settings <- eventReactive(
+    input$build,
+    list(
+      filters = current_filters(),
+      dates = input$dates,
+      time_range = as.numeric(c(input$time_start, input$time_end)),
+      agency = input$agency
+    ),
     ignoreNULL = FALSE
   )
 
@@ -367,8 +406,13 @@ server <- function(input, output, session) {
         if (with_baseline) {
           alts <- c(list(scenario(solve(length(include), 1), 'Baseline')), alts)
         }
-        # incidents are kept so Response Stats uses the same calls the optimizer did
-        list(method = method, alts = alts, best = if (with_baseline) 2L else 1L, incidents = incidents)
+        # incidents are kept so Response Stats uses the same calls the optimizer did, settings so the workbook can list them
+        settings <- list(
+          method = method, p = input$p, cost_col = cost_col, threshold = input$threshold,
+          include = include, exclude = exclude, use_runcard = !is.null(runcard), n_alts = n_alts,
+          baseline = with_baseline, build = build_settings()
+        )
+        list(method = method, alts = alts, best = if (with_baseline) 2L else 1L, incidents = incidents, settings = settings)
       }),
       error = function(e) {
         showNotification(conditionMessage(e), type = 'error', duration = 10)
@@ -670,6 +714,130 @@ server <- function(input, output, session) {
       )
     },
     content = function(file) write_csv(rs_fdz_display(), file, na = '')
+  )
+
+  # Key/value rows describing the run behind the workbook, so its numbers can be traced to their settings.
+  workbook_settings <- function(r, ref_label, levels, threshold, years, n_calls, with_ci) {
+    s <- r$settings
+    b <- s$build
+    codes <- \(x) if (length(x) == 0) 'All' else paste(x, collapse = ', ')
+    stations <- \(x) if (length(x) == 0) 'None' else paste(sort(x), collapse = ', ')
+    clock <- \(m) sprintf('%02d:%02d', m %/% 60, m %% 60)
+    note <- \(x) tibble(Setting = 'Note', Value = x)
+
+    bind_rows(
+      tibble(
+        Setting = c(
+          'Generated', 'Reference Scenario', 'Scenarios', 'Response Levels', 'Threshold for % Within (Minutes)', '95% CIs',
+          'Method', 'Number of Stations (p)', 'Travel Time Statistic',
+          if (s$method == 'mclp') 'Optimizer Coverage Threshold (Minutes)',
+          'Required Stations', 'Excluded Stations', 'Include Baseline', 'Use Run Card Order', 'Number of Alternatives',
+          'Source System'
+        ),
+        Value = c(
+          format(Sys.time(), '%Y-%m-%d %H:%M'), ref_label, paste(map_chr(r$alts, 'label'), collapse = '; '),
+          paste(unique(due_label(range(levels))), collapse = ' to '), as.character(threshold),
+          if (with_ci) 'Yes (1,000 draws, whole FDZs resampled)' else 'No',
+          if (s$method == 'p_median') 'P-Median (Minimize Travel Time)' else 'MCLP (Maximize Coverage)',
+          as.character(s$p), names(cost_choices)[cost_choices == s$cost_col],
+          if (s$method == 'mclp') as.character(s$threshold),
+          stations(s$include), stations(s$exclude), if (s$baseline) 'Yes' else 'No',
+          if (s$use_runcard) 'Yes' else 'No', as.character(s$n_alts),
+          codes(b$filters$source_system)
+        )
+      ),
+      tibble(Setting = filter_defs$label, Value = map_chr(filter_defs$key, \(key) codes(b$filters[[key]]))),
+      tibble(
+        Setting = c('FDZ Agency', 'Incident Start Date', 'Incident End Date', 'Time Window', 'Years', 'Calls', 'Calls per Year'),
+        Value = c(
+          codes(b$agency), as.character(b$dates[1]), as.character(b$dates[2]),
+          paste(clock(b$time_range[1]), 'to', clock(b$time_range[2])),
+          as.character(round(years, 2)), format(n_calls, big.mark = ','), format(round(n_calls / years, 1), big.mark = ',')
+        )
+      ),
+      note('Differences are scenario minus reference, so negative minutes are faster.'),
+      note('Per year figures are counts divided by Years (end date minus start date plus one day, over 365.25). With a time window set, they are calls per year within that window.'),
+      note("Responding stations follow the CAD run card order for each scenario's open stations, not the optimizer's assignments."),
+      note('Travel times are OSRM model estimates of driving time and do not include turnout time.'),
+      note('Calls Compared counts calls with a responder at that level on both sides; zones where another agency is first due are flagged in By FDZ.'),
+      note('Workload counts calls by station and is call volume, not unit utilization. Edit the Units sheet to split station load by unit.')
+    )
+  }
+
+  # every scenario from the last run against the Left Scenario, at 1st to 3rd due (fewer when no scenario has that many stations)
+  output$download_rs_xlsx <- downloadHandler(
+    filename = function() {
+      r <- req(result())
+      ref_label <- r$alts[[as.integer(req(input$rs_left))]]$label
+      paste0('response_stats_all_scenarios_vs_', scenario_slug(ref_label), '_', Sys.Date(), '.xlsx')
+    },
+    content = function(file) {
+      r <- req(result())
+      ref <- as.integer(req(input$rs_left))
+      threshold <- input$threshold
+      if (!isTRUE(is.finite(threshold))) {
+        showNotification('Coverage threshold must be a number', type = 'error', duration = 10)
+        req(FALSE)
+      }
+      with_ci <- isTRUE(input$rs_xlsx_ci)
+      scenarios <- map(r$alts, \(a) list(label = a$label, open_stations = a$res$open_stations))
+      levels <- seq_len(min(3L, max(map_int(scenarios, \(sc) length(sc$open_stations)))))
+      dates <- r$settings$build$dates
+      years <- (as.numeric(dates[2] - dates[1]) + 1) / 365.25
+      n_calls <- n_distinct(r$incidents$dest_id[!is.na(r$incidents$fdz)])
+
+      withProgress(message = 'Building Workbook', value = 0, {
+        n_steps <- length(scenarios) * length(levels) + 1
+        sheets <- scenario_response_sheets(
+          r$incidents, runcard_df, scenarios, ref,
+          levels = levels, threshold = threshold, years = years, with_ci = with_ci,
+          on_step = \(detail) incProgress(1 / n_steps, detail = detail)
+        )
+        incProgress(1 / n_steps, detail = 'Writing Excel')
+        settings <- workbook_settings(r, scenarios[[ref]]$label, levels, threshold, years, n_calls, with_ci)
+        write_response_workbook(c(list(Settings = settings), sheets), units_stations = stations_df$source_id, file)
+      })
+    }
+  )
+
+  # Call Data: every call with each scenario's 1st due run card response, from the same calls and scenarios as the workbook.
+  # Built once per run when first downloaded, then shared by the CSV and Excel downloads.
+  calls_scenarios_df <- reactive({
+    r <- req(result())
+    tibble(
+      Scenario = map_chr(r$alts, 'label'),
+      `Open Stations` = map_chr(r$alts, \(a) paste(sort(a$res$open_stations), collapse = ', '))
+    )
+  })
+
+  call_table <- reactive({
+    r <- req(result())
+    scenarios <- map(r$alts, \(a) list(label = a$label, open_stations = a$res$open_stations))
+    withProgress(message = 'Building Call Data', value = 0.3, scenario_call_table(r$incidents, runcard_df, scenarios))
+  })
+
+  output$calls_note <- renderUI({
+    if (is.null(result())) p(class = 'text-muted', 'Run the optimizer to export calls.')
+  })
+
+  output$calls_scenarios <- renderDT({
+    datatable(calls_scenarios_df(), rownames = FALSE, options = list(dom = 't', ordering = FALSE, paging = FALSE))
+  })
+
+  output$download_calls_csv <- downloadHandler(
+    filename = function() paste0('call_data_', Sys.Date(), '.csv'),
+    content = function(file) {
+      calls <- call_table()
+      withProgress(message = 'Writing CSV', value = 0.7, write_csv(calls, file, na = ''))
+    }
+  )
+
+  output$download_calls_xlsx <- downloadHandler(
+    filename = function() paste0('call_data_', Sys.Date(), '.xlsx'),
+    content = function(file) {
+      calls <- call_table()
+      withProgress(message = 'Writing Excel', value = 0.7, write_call_workbook(calls, calls_scenarios_df(), file))
+    }
   )
 }
 

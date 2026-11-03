@@ -688,3 +688,378 @@ bootstrap_response_diff <- function(paired_df, n_boot = 1000, level = 0.95) {
     upper = apply(draws, 1, quantile, 1 - alpha, names = FALSE)
   )
 }
+
+# Sheets for an Excel workbook comparing every scenario of an optimizer run with one reference scenario, at each response level.
+# scenarios is a list of list(label, open_stations), ref is the position of the reference scenario in it.
+# Each comparison is compare_runcard_response() with the reference on the left, so differences are scenario minus reference.
+# runcard_df is the app's runcard_beats data (fdz, station, rank, agency, other_agency_first).
+# threshold is the minutes used by the % within columns, years turns counts into calls per year.
+# with_ci adds bootstrap_response_diff() intervals for every scenario except the reference.
+# on_step, if given, is called with a short label before each comparison, e.g. to move a progress bar.
+# Returns a named list of tibbles (Summary, By FDZ, By Station, Workload) with display column names.
+scenario_response_sheets <- function(
+  incidents_df,
+  runcard_df,
+  scenarios,
+  ref,
+  levels = 1:3,
+  threshold,
+  years,
+  with_ci = FALSE,
+  on_step = NULL
+) {
+  ref_stations <- scenarios[[ref]]$open_stations
+
+  # only a zone's 1st to max(levels) due stations in some scenario can respond, so the other rows of the matrix are dropped
+  # once up front. Zones with no responder at all keep their rows so their calls still count as unserved.
+  responder_pairs <- map(scenarios, \(sc) runcard_responders(runcard_df, sc$open_stations)) |>
+    list_rbind() |>
+    filter(due <= max(levels)) |>
+    distinct(fdz, source_id = station)
+  incidents_df <- incidents_df |>
+    filter(!is.na(fdz)) |>
+    left_join(responder_pairs |> mutate(responds = TRUE), by = c('fdz', 'source_id')) |>
+    filter(responds %in% TRUE | !fdz %in% responder_pairs$fdz) |>
+    select(-responds)
+
+  per_year <- \(x) round(x / years, 1)
+  pct_within <- \(x) mean(x <= threshold)
+  station_list <- \(x) paste(sort(x), collapse = ', ')
+  # an empty comparison (no calls with a k-th due station) gives NaN, which Excel shows as an error
+  nan_to_na <- \(df) mutate(df, across(where(is.numeric), \(x) replace(x, is.nan(x), NA)))
+
+  zone_info <- runcard_df |>
+    group_by(fdz) |>
+    summarise(agency = first(agency), other_agency_first = any(other_agency_first), .groups = 'drop')
+  zone_calls <- incidents_df |> distinct(dest_id, fdz) |> count(fdz, name = 'calls')
+
+  comparisons <- map(seq_along(scenarios), \(i) {
+    sc <- scenarios[[i]]
+    # only the two sides' stations can respond, so the rest of the matrix is dropped once per scenario
+    sc_incidents <- incidents_df |> filter(source_id %in% union(ref_stations, sc$open_stations))
+    map(levels, \(k) {
+      if (!is.null(on_step)) on_step(paste(sc$label, due_label(k)))
+      cmp <- compare_runcard_response(sc_incidents, runcard_df, ref_stations, sc$open_stations, k)
+      ci <- if (with_ci && i != ref && nrow(cmp$paired) > 0) bootstrap_response_diff(cmp$paired)
+      list(scenario = i, k = k, cmp = cmp, ci = ci)
+    })
+  }) |>
+    list_flatten()
+
+  summary_df <- map(comparisons, \(x) {
+    sc <- scenarios[[x$scenario]]
+    paired <- x$cmp$paired
+    stat <- \(side, name) x$cmp$summary[[side]][x$cmp$summary$stat == name]
+    unserved <- \(side) x$cmp$unserved[x$cmp$unserved$side == side, ]
+    saved <- paired$left_minutes - paired$right_minutes
+    row <- tibble(
+      Scenario = sc$label,
+      `Response Level` = due_label(x$k),
+      `Open Stations` = station_list(sc$open_stations),
+      `Stations Added` = station_list(setdiff(sc$open_stations, ref_stations)),
+      `Stations Removed` = station_list(setdiff(ref_stations, sc$open_stations)),
+      `Calls Compared` = nrow(paired),
+      `Calls Compared per Year` = per_year(nrow(paired)),
+      `Reference Mean Minutes` = stat('left', 'mean'),
+      `Scenario Mean Minutes` = stat('right', 'mean'),
+      `Difference Mean Minutes` = stat('difference', 'mean'),
+      `Reference Median Minutes` = stat('left', 'median'),
+      `Scenario Median Minutes` = stat('right', 'median'),
+      `Difference Median Minutes` = stat('difference', 'median'),
+      `Reference P90 Minutes` = stat('left', 'p90'),
+      `Scenario P90 Minutes` = stat('right', 'p90'),
+      `Difference P90 Minutes` = stat('difference', 'p90'),
+      `Reference % Within Threshold` = pct_within(paired$left_minutes),
+      `Scenario % Within Threshold` = pct_within(paired$right_minutes),
+      `Change in % Within Threshold` = pct_within(paired$right_minutes) - pct_within(paired$left_minutes),
+      `Reference Calls Within Threshold per Year` = per_year(sum(paired$left_minutes <= threshold)),
+      `Scenario Calls Within Threshold per Year` = per_year(sum(paired$right_minutes <= threshold)),
+      `Reference FDZs with P90 Over Threshold` = sum(x$cmp$by_fdz$left_p90 > threshold, na.rm = TRUE),
+      `Scenario FDZs with P90 Over Threshold` = sum(x$cmp$by_fdz$right_p90 > threshold, na.rm = TRUE),
+      `Calls Faster` = sum(saved > 0),
+      `Calls Faster per Year` = per_year(sum(saved > 0)),
+      `Calls Slower` = sum(saved < 0),
+      `Calls Slower per Year` = per_year(sum(saved < 0)),
+      `Calls Same` = sum(saved == 0),
+      `Calls Same per Year` = per_year(sum(saved == 0)),
+      `Minutes Saved per Year` = per_year(sum(saved)),
+      `Reference Unserved Zones` = unserved('left')$zones,
+      `Reference Unserved Calls` = unserved('left')$calls,
+      `Reference Unserved Calls per Year` = per_year(unserved('left')$calls),
+      `Scenario Unserved Zones` = unserved('right')$zones,
+      `Scenario Unserved Calls` = unserved('right')$calls,
+      `Scenario Unserved Calls per Year` = per_year(unserved('right')$calls)
+    )
+    if (with_ci) {
+      ci <- x$ci %||% tibble(stat = c('mean', 'median', 'p90'), lower = NA_real_, upper = NA_real_)
+      ci_value <- \(name, col) ci[[col]][ci$stat == name]
+      row <- row |>
+        mutate(
+          `Difference Mean 95% CI Lower` = ci_value('mean', 'lower'),
+          `Difference Mean 95% CI Upper` = ci_value('mean', 'upper'),
+          `Difference Median 95% CI Lower` = ci_value('median', 'lower'),
+          `Difference Median 95% CI Upper` = ci_value('median', 'upper'),
+          `Difference P90 95% CI Lower` = ci_value('p90', 'lower'),
+          `Difference P90 95% CI Upper` = ci_value('p90', 'upper'),
+          .after = `Difference P90 Minutes`
+        )
+    }
+    row
+  }) |>
+    list_rbind() |>
+    nan_to_na() |>
+    mutate(
+      across(c(ends_with('Minutes'), contains('95% CI')), \(x) round(x, 2)),
+      across(contains('% Within'), \(x) round(x, 4))
+    )
+
+  by_fdz_df <- map(comparisons, \(x) {
+    within <- x$cmp$paired |>
+      group_by(fdz) |>
+      summarise(left_within = pct_within(left_minutes), right_within = pct_within(right_minutes), .groups = 'drop')
+    x$cmp$by_fdz |>
+      left_join(within, by = 'fdz') |>
+      left_join(zone_info, by = 'fdz') |>
+      transmute(
+        Scenario = scenarios[[x$scenario]]$label,
+        `Response Level` = due_label(x$k),
+        FDZ = fdz,
+        Agency = agency,
+        `Other Agency First Due` = if_else(other_agency_first %in% TRUE, 'Yes', ''),
+        `Reference Station` = left_station,
+        `Scenario Station` = right_station,
+        `Station Changed` = if_else(
+          is.na(left_station) != is.na(right_station) | coalesce(left_station != right_station, FALSE), 'Yes', ''
+        ),
+        Calls = calls,
+        `Calls per Year` = per_year(calls),
+        `Calls Compared` = coalesce(paired_calls, 0L),
+        `Reference Mean Minutes` = left_mean,
+        `Scenario Mean Minutes` = right_mean,
+        `Difference Mean Minutes` = diff_mean,
+        `Reference Median Minutes` = left_median,
+        `Scenario Median Minutes` = right_median,
+        `Difference Median Minutes` = diff_median,
+        `Reference P90 Minutes` = left_p90,
+        `Scenario P90 Minutes` = right_p90,
+        `Difference P90 Minutes` = diff_p90,
+        `Reference % Within Threshold` = left_within,
+        `Scenario % Within Threshold` = right_within
+      )
+  }) |>
+    list_rbind() |>
+    mutate(
+      across(ends_with('Minutes'), \(x) round(x, 2)),
+      across(contains('% Within'), \(x) round(x, 4))
+    )
+
+  # call level stats grouped by the scenario's responding station: each call goes to its zone's k-th due station,
+  # and the reference columns are the same calls as the reference scenario served them
+  by_station_df <- map(comparisons, \(x) {
+    zone_station <- x$cmp$by_fdz |>
+      filter(!is.na(right_station)) |>
+      select(fdz, calls, station = right_station)
+    station_calls <- zone_station |>
+      group_by(station) |>
+      summarise(fdzs = n(), calls = sum(calls), .groups = 'drop')
+    x$cmp$paired |>
+      inner_join(zone_station |> select(fdz, station), by = 'fdz') |>
+      group_by(station) |>
+      summarise(
+        paired_calls = n(),
+        left_mean = mean(left_minutes),
+        right_mean = mean(right_minutes),
+        left_median = median(left_minutes),
+        right_median = median(right_minutes),
+        left_p90 = quantile(left_minutes, 0.9, names = FALSE),
+        right_p90 = quantile(right_minutes, 0.9, names = FALSE),
+        left_within = pct_within(left_minutes),
+        right_within = pct_within(right_minutes),
+        .groups = 'drop'
+      ) |>
+      right_join(station_calls, by = 'station') |>
+      arrange(station) |>
+      transmute(
+        Scenario = scenarios[[x$scenario]]$label,
+        `Response Level` = due_label(x$k),
+        `Responding Station` = station,
+        FDZs = fdzs,
+        Calls = calls,
+        `Calls per Year` = per_year(calls),
+        `Calls Compared` = coalesce(paired_calls, 0L),
+        `Reference Mean Minutes` = left_mean,
+        `Scenario Mean Minutes` = right_mean,
+        `Difference Mean Minutes` = right_mean - left_mean,
+        `Reference Median Minutes` = left_median,
+        `Scenario Median Minutes` = right_median,
+        `Difference Median Minutes` = right_median - left_median,
+        `Reference P90 Minutes` = left_p90,
+        `Scenario P90 Minutes` = right_p90,
+        `Difference P90 Minutes` = right_p90 - left_p90,
+        `Reference % Within Threshold` = left_within,
+        `Scenario % Within Threshold` = right_within,
+        `Change in % Within Threshold` = right_within - left_within
+      )
+  }) |>
+    list_rbind() |>
+    mutate(
+      across(ends_with('Minutes'), \(x) round(x, 2)),
+      across(contains('% Within'), \(x) round(x, 4))
+    )
+
+  # station load: calls in each zone go to the zone's k-th due station on the run card
+  due_calls <- function(stations) {
+    runcard_responders(runcard_df, stations) |>
+      filter(due %in% levels) |>
+      inner_join(zone_calls, by = 'fdz') |>
+      count(station, due, wt = calls, name = 'calls')
+  }
+  ref_due <- due_calls(ref_stations)
+
+  workload_df <- map(scenarios, \(sc) {
+    stations <- sort(union(sc$open_stations, ref_stations))
+    calls_at <- \(df, k) {
+      d <- df |> filter(due == k)
+      coalesce(d$calls[match(stations, d$station)], 0L)
+    }
+    sc_due <- due_calls(sc$open_stations)
+    out <- tibble(
+      Scenario = sc$label,
+      Station = stations,
+      `Open in Scenario` = if_else(stations %in% sc$open_stations, 'Yes', ''),
+      `Open in Reference` = if_else(stations %in% ref_stations, 'Yes', '')
+    )
+    for (k in levels) {
+      out[[paste(due_label(k), 'Calls')]] <- calls_at(sc_due, k)
+      out[[paste(due_label(k), 'Calls per Year')]] <- per_year(calls_at(sc_due, k))
+    }
+    first_due <- calls_at(sc_due, 1)
+    ref_first_due <- calls_at(ref_due, 1)
+    out |>
+      mutate(
+        `Reference 1st Due Calls` = ref_first_due,
+        `Reference 1st Due Calls per Year` = per_year(ref_first_due),
+        `Change in 1st Due Calls` = first_due - ref_first_due,
+        `Change in 1st Due Calls per Year` = per_year(first_due - ref_first_due)
+      )
+  }) |>
+    list_rbind()
+
+  list(Summary = summary_df, `By FDZ` = by_fdz_df, `By Station` = by_station_df, Workload = workload_df)
+}
+
+# Write workbook sheets (a named list of tibbles, e.g. Settings plus scenario_response_sheets()) to an xlsx file.
+# Headers are bold and frozen, % columns show as percents, minutes with 2 decimals and per year counts with 1.
+# A Units sheet lists units_stations with 1 unit each. The Workload sheet looks its stations up there and divides each
+# scenario station load (k-th due calls per year) by the units with live formulas, so editing Units in Excel updates the unit load.
+write_response_workbook <- function(sheets, units_stations, file) {
+  wb <- openxlsx::createWorkbook()
+  header_style <- openxlsx::createStyle(textDecoration = 'bold')
+  per_year_style <- openxlsx::createStyle(numFmt = '0.0')
+  formats <- list(
+    list(pattern = '% Within', style = openxlsx::createStyle(numFmt = '0.0%')),
+    list(pattern = 'Minutes$|95% CI', style = openxlsx::createStyle(numFmt = '0.00')),
+    list(pattern = 'per Year$', style = per_year_style)
+  )
+
+  add_sheet <- function(name, df) {
+    openxlsx::addWorksheet(wb, name)
+    openxlsx::writeData(wb, name, df, headerStyle = header_style, keepNA = FALSE)
+    openxlsx::freezePane(wb, name, firstRow = TRUE)
+    if (nrow(df) > 0) {
+      for (f in formats) {
+        cols <- which(str_detect(names(df), f$pattern))
+        if (length(cols) > 0) {
+          openxlsx::addStyle(wb, name, f$style, rows = seq_len(nrow(df)) + 1, cols = cols, gridExpand = TRUE)
+        }
+      }
+    }
+    openxlsx::setColWidths(wb, name, cols = seq_along(df), widths = 'auto')
+  }
+
+  iwalk(sheets, \(df, name) add_sheet(name, df))
+
+  add_sheet('Units', tibble(
+    Station = units_stations,
+    Units = 1,
+    Note = c('Units of this type housed at each station, edit to split station load by unit', rep(NA, length(units_stations) - 1))
+  ))
+
+  workload <- sheets$Workload
+  if (!is.null(workload) && nrow(workload) > 0) {
+    rows <- seq_len(nrow(workload)) + 1
+    cell <- \(col_idx) paste0(openxlsx::int2col(col_idx), rows)
+    load_cols <- which(str_detect(names(workload), '^[0-9]+[a-z]{2} Due Calls per Year$'))
+    units_idx <- ncol(workload) + 1
+    unit_load_idx <- units_idx + seq_along(load_cols)
+
+    headers <- c('Units', str_replace(names(workload)[load_cols], 'Calls per Year$', 'Calls per Unit per Year'))
+    openxlsx::writeData(wb, 'Workload', as.data.frame(t(headers)), startCol = units_idx, startRow = 1, colNames = FALSE)
+    openxlsx::addStyle(wb, 'Workload', header_style, rows = 1, cols = c(units_idx, unit_load_idx))
+
+    # units come from the Units sheet, so a station's unit load follows its edited count in every scenario
+    openxlsx::writeFormula(
+      wb, 'Workload',
+      paste0('INDEX(Units!$B:$B, MATCH(', cell(match('Station', names(workload))), ', Units!$A:$A, 0))'),
+      startCol = units_idx, startRow = 2
+    )
+    walk2(load_cols, unit_load_idx, \(load_idx, out_idx) {
+      openxlsx::writeFormula(
+        wb, 'Workload', paste0('IFERROR(', cell(load_idx), '/', cell(units_idx), ', "")'),
+        startCol = out_idx, startRow = 2
+      )
+    })
+    openxlsx::addStyle(wb, 'Workload', per_year_style, rows = rows, cols = unit_load_idx, gridExpand = TRUE)
+    openxlsx::setColWidths(wb, 'Workload', cols = c(units_idx, unit_load_idx), widths = c(8, rep(28, length(unit_load_idx))))
+  }
+
+  openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
+}
+
+# One row per call (calls outside any fdz are dropped) with each scenario's 1st due station on the run card and its travel time
+# and distance, so the 1st due workbook stats can be rebuilt from the calls.
+# scenarios is a list of list(label, open_stations). Stations come from runcard_responders(), the same as
+# runcard_response_minutes(), so a blank station means the zone's card has no open station for that scenario.
+# Returns a tibble with Incident Number, FDZ and a Station, Travel Minutes and Distance Miles column per scenario.
+scenario_call_table <- function(incidents_df, runcard_df, scenarios) {
+  first_due <- map(scenarios, \(sc) {
+    runcard_responders(runcard_df, sc$open_stations) |>
+      filter(due == 1) |>
+      select(fdz, source_id = station)
+  })
+
+  incidents_df <- incidents_df |> filter(!is.na(fdz))
+  calls_df <- incidents_df |>
+    distinct(dest_id, fdz) |>
+    arrange(fdz, dest_id)
+  # only some scenario's 1st due station can respond, so the rest of the matrix is dropped once up front
+  responder_df <- incidents_df |>
+    semi_join(list_rbind(first_due) |> distinct(), by = c('fdz', 'source_id')) |>
+    select(dest_id, fdz, source_id, duration_min, distance_m)
+
+  out <- tibble(`Incident Number` = calls_df$dest_id, FDZ = calls_df$fdz)
+  for (i in seq_along(scenarios)) {
+    response <- responder_df |> inner_join(first_due[[i]], by = c('fdz', 'source_id'))
+    row <- match(calls_df$dest_id, response$dest_id)
+    label <- scenarios[[i]]$label
+    out[[paste(label, '1st Due Station')]] <- response$source_id[row]
+    out[[paste(label, 'Travel Minutes')]] <- response$duration_min[row]
+    out[[paste(label, 'Distance Miles')]] <- round(response$distance_m[row] / 1609.344, 2)
+  }
+  out
+}
+
+# Write a call table from scenario_call_table() and the scenario list (Scenario, Open Stations) to an xlsx file.
+# Column widths are fixed because sizing them from hundreds of thousands of rows is slow.
+write_call_workbook <- function(calls_df, scenarios_df, file) {
+  wb <- openxlsx::createWorkbook()
+  header_style <- openxlsx::createStyle(textDecoration = 'bold')
+  sheets <- list(Calls = calls_df, Scenarios = scenarios_df)
+  iwalk(sheets, \(df, name) {
+    openxlsx::addWorksheet(wb, name)
+    openxlsx::writeData(wb, name, df, headerStyle = header_style, keepNA = FALSE)
+    openxlsx::freezePane(wb, name, firstRow = TRUE)
+    openxlsx::setColWidths(wb, name, cols = seq_along(df), widths = 24)
+  })
+  openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
+}
