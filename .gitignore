@@ -20,3 +20,6 @@ datasets/**/*.xlsx
 
 # Incident-level CAD locations
 datasets/**/*_cad_incident_locations.csv
+
+# Phase 0 baseline outputs (incident-level, local only)
+_baseline/
