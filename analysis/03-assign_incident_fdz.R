@@ -39,10 +39,18 @@ fdz_sf <- data.table::fread(
 # Incidents -------------------------------------------------------------------
 
 # The same incident set script 02 routes
+# Code columns as text, so codes like 09 keep their leading zero
 incident_df <- data.table::fread(
   incident_file,
   na.strings = "NULL",
-  data.table = FALSE
+  data.table = FALSE,
+  colClasses = list(
+    character = c(
+      "incident_category_code",
+      "incident_subcategory_code",
+      "dispatch_category_code"
+    )
+  )
 ) |>
   clean_incidents()
 
@@ -74,7 +82,12 @@ incident_fdz_df <- incident_df |>
     dispatch_code,
     rms_incident_type_code = incident_type_code,
     rms_source_system = source_system,
-    ems_unit_capability
+    ems_unit_capability,
+    # for the incident filters (see incident_filter())
+    incident_category_code,
+    incident_subcategory_code,
+    dispatch_category_code,
+    dispatch_case_type_description
   )
 
 # Checks ----------------------------------------------------------------------
