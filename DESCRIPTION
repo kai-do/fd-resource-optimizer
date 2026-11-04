@@ -8,8 +8,10 @@ License: MIT + file LICENSE
 Imports: 
     config,
     dplyr,
+    flextable,
     golem,
     lubridate,
+    officer,
     openxlsx,
     osrm,
     purrr,
