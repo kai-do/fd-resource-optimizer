@@ -120,7 +120,7 @@ scenario_responders <- function(scenarios, matrix_df, runcard_df, filters, due) 
     # unserved counts in the compare_*() functions
     zoned <- filtered[!is.na(filtered$fdz_id), ]
     calls[[f$name]] <- data.frame(
-      filter_name = f$name,
+      filter_name = rep(f$name, nrow(zoned)),
       dest_id = zoned$dest_id,
       fdz_id = zoned$fdz_id
     )[!duplicated(zoned$dest_id), ]

@@ -29,6 +29,16 @@ test_that("compare_overall gives baseline, scenario and diff per metric", {
   expect_equal(metric_row(out, "mean_distance_m")$diff, 3000)
 })
 
+test_that("total_minutes sums the paired calls' minutes", {
+  out <- compare_overall(make_scenarios(), make_scenario_matrix_df(), runcard())
+  total <- metric_row(out, "total_minutes")
+
+  expect_equal(total$baseline, 1.1 + 1.2 + 7.3 + 3.4)
+  expect_equal(total$scenario, 7.1 + 7.2 + 7.3 + 3.4)
+  # same calls on both sides, so the total diff is n_calls times the mean diff
+  expect_equal(total$diff, 4 * metric_row(out, "mean_minutes")$diff)
+})
+
 test_that("compare_overall threshold metrics", {
   out <- compare_overall(make_scenarios(), make_scenario_matrix_df(), runcard(), thresholds = 4)
 
@@ -157,6 +167,8 @@ test_that("compare_by_fdz shows each zone's responders and diffs", {
   expect_equal(means$responder_changed, c(TRUE, FALSE, FALSE))
   expect_equal(means$diff, c(6, 0, 0))
   expect_equal(out$scenario[out$metric == "n_calls"], c(2, 1, 1))
+  # 1A's two calls: 1.1 + 1.2 in the baseline, 7.1 + 7.2 in the scenario
+  expect_equal(out$diff[out$metric == "total_minutes"], c(12, 0, 0))
 })
 
 test_that("compare_by_fdz leaves a side's metrics NA when the zone has no responder", {
@@ -189,6 +201,12 @@ test_that("compare_by_station shows the workload moving between stations", {
   expect_equal(get(7, "n_fdz")$baseline, 1)
   expect_equal(get(7, "n_fdz")$scenario, 2)
   expect_equal(get(3, "n_incidents")$diff, 0)
+
+  # drive minutes: station 1 drops its 1.1 + 1.2 to 0; station 7 goes from
+  # 7.3 to 7.1 + 7.2 + 7.3
+  expect_equal(get(1, "total_minutes")$scenario, 0)
+  expect_equal(get(1, "total_minutes")$baseline, 2.3)
+  expect_equal(get(7, "total_minutes")$scenario, 21.6)
 })
 
 # Baseline checks -------------------------------------------------------------

@@ -17,6 +17,9 @@
 #'
 #' Time, distance and threshold metrics are over the paired calls (served in
 #' both); calls served in only one are counted as unserved instead.
+#' `total_minutes` sums every paired call's minutes, a demand-weighted total
+#' (the quantity the p-median optimizer minimises); with the same calls on both
+#' sides its diff is `n_calls` times the mean diff.
 #'
 #' @inheritParams stats_by_station
 #' @param scenarios Scenarios as for [stats_by_station()], plus a logical
@@ -46,6 +49,12 @@ compare_overall <- function(
   level = 0.95
 ) {
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
+  compare_overall_paired(paired, thresholds, ci, n_boot, level)
+}
+
+# compare_overall() from precomputed paired_calls(), so several
+# comparisons can share one (slow) run card assignment
+compare_overall_paired <- function(paired, thresholds, ci, n_boot, level) {
   groups <- split_groups(paired)
 
   out <- lapply(groups, function(g) {
@@ -103,6 +112,12 @@ compare_calls <- function(
   slower_by = c(2, 5)
 ) {
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
+  compare_calls_paired(paired, slower_by)
+}
+
+# compare_calls() from precomputed paired_calls(), so several
+# comparisons can share one (slow) run card assignment
+compare_calls_paired <- function(paired, slower_by) {
   groups <- split_groups(paired)
 
   out <- lapply(groups, function(g) {
@@ -144,7 +159,10 @@ compare_calls <- function(
 #'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `fdz_id`,
 #'   `baseline_source_id`, `scenario_source_id` (the responders),
 #'   `responder_changed`, `metric`, `baseline`, `scenario`, `diff`,
-#'   `pct_diff`. A side with no responder in the zone has `NA` metrics.
+#'   `pct_diff`. Metrics: `n_calls`, `mean_minutes`, `total_minutes` (the
+#'   zone's summed call minutes, so busy zones weigh more), `median_minutes`,
+#'   `p90_minutes`, `pct_within_<t>min`. A side with no responder in the zone
+#'   has `NA` metrics.
 #' @noRd
 compare_by_fdz <- function(
   scenarios,
@@ -155,6 +173,12 @@ compare_by_fdz <- function(
   thresholds = c(4, 8)
 ) {
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
+  compare_by_fdz_paired(paired, thresholds)
+}
+
+# compare_by_fdz() from precomputed paired_calls(), so several
+# comparisons can share one (slow) run card assignment
+compare_by_fdz_paired <- function(paired, thresholds) {
   keys <- c("filter_name", "scenario_id", "scenario_name", "due", "fdz_id")
 
   zone_side <- function(side) {
@@ -167,6 +191,7 @@ compare_by_fdz <- function(
         source_id = dplyr::first(responder),
         n_calls = dplyr::n(),
         mean_minutes = mean(minutes),
+        total_minutes = sum(minutes),
         median_minutes = quantile_or_na(minutes, 0.5),
         p90_minutes = quantile_or_na(minutes, 0.9),
         .by = dplyr::all_of(keys)
@@ -190,6 +215,7 @@ compare_by_fdz <- function(
   metrics <- c(
     "n_calls",
     "mean_minutes",
+    "total_minutes",
     "median_minutes",
     "p90_minutes",
     paste0("pct_within_", thresholds, "min")
@@ -223,9 +249,10 @@ compare_by_fdz <- function(
 #'
 #' @return One row per filter set, scenario, due level, station and metric:
 #'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `source_id`,
-#'   `metric` (`n_incidents`, `n_fdz`, `median_minutes`, `p90_minutes`),
-#'   `baseline`, `scenario`, `diff`, `pct_diff`. A station that does not
-#'   respond on one side has 0 incidents and zones and `NA` times there.
+#'   `metric` (`n_incidents`, `n_fdz`, `total_minutes` = drive minutes of
+#'   all its calls, `median_minutes`, `p90_minutes`), `baseline`, `scenario`,
+#'   `diff`, `pct_diff`. A station that does not respond on one side has 0
+#'   incidents, zones and total minutes and `NA` median and p90 there.
 #' @noRd
 compare_by_station <- function(
   scenarios,
@@ -235,6 +262,12 @@ compare_by_station <- function(
   due = 1
 ) {
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
+  compare_by_station_paired(paired)
+}
+
+# compare_by_station() from precomputed paired_calls(), so several
+# comparisons can share one (slow) run card assignment
+compare_by_station_paired <- function(paired) {
   keys <- c("filter_name", "scenario_id", "scenario_name", "due", "source_id")
 
   station_side <- function(side) {
@@ -246,6 +279,7 @@ compare_by_station <- function(
       dplyr::summarise(
         n_incidents = dplyr::n(),
         n_fdz = dplyr::n_distinct(fdz_id),
+        total_minutes = sum(minutes),
         median_minutes = quantile_or_na(minutes, 0.5),
         p90_minutes = quantile_or_na(minutes, 0.9),
         .by = dplyr::all_of(keys)
@@ -259,13 +293,13 @@ compare_by_station <- function(
     suffix = c(".baseline", ".scenario")
   )
   # a station that does not respond on one side serves no calls there
-  for (col in c("n_incidents", "n_fdz")) {
+  for (col in c("n_incidents", "n_fdz", "total_minutes")) {
     for (side in c(".baseline", ".scenario")) {
       wide[[paste0(col, side)]][is.na(wide[[paste0(col, side)]])] <- 0L
     }
   }
 
-  metrics <- c("n_incidents", "n_fdz", "median_minutes", "p90_minutes")
+  metrics <- c("n_incidents", "n_fdz", "total_minutes", "median_minutes", "p90_minutes")
   out <- long_metrics(wide[keys], wide, metrics)
   sort_compare(out, paired, then = c("due", "source_id"), metric_order = metrics)
 }
@@ -341,6 +375,8 @@ overall_metrics <- function(both, side, thresholds) {
   values <- c(
     n_calls = length(minutes),
     mean_minutes = if (length(minutes) > 0) mean(minutes) else NA_real_,
+    # demand-weighted: every call's minutes count, so busy areas weigh more
+    total_minutes = sum(minutes),
     median_minutes = quantile_or_na(minutes, 0.5),
     p90_minutes = quantile_or_na(minutes, 0.9),
     mean_distance_m = if (length(minutes) > 0) mean(both[[paste0(side, "_distance_m")]]) else NA_real_
@@ -380,6 +416,10 @@ long_metrics <- function(info, wide, metrics) {
 # Sort by filter set and scenario in input order, then the `then` columns,
 # then metric in `metric_order`
 sort_compare <- function(out, paired, then, metric_order) {
+  # no calls in any filter set: nothing to sort
+  if (nrow(out) == 0) {
+    return(out)
+  }
   ord <- do.call(
     order,
     c(

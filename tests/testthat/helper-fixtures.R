@@ -89,6 +89,7 @@ make_scenario_matrix_df <- function() {
       c("2024-01-01 12:00", "2024-01-01 23:00", "2024-01-02 12:00", "2024-01-03 12:00"),
       tz = "America/New_York"
     ),
+    ems_unit_capability = c("PARAMEDIC", "AEMT", "PARAMEDIC", NA),
     offset = c(0.1, 0.2, 0.3, 0.4)
   )
   df <- merge(data.frame(source_id = c(1L, 3L, 7L, 22L)), incidents)

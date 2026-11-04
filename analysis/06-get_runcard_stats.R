@@ -21,6 +21,9 @@
 #                             compare_fdz.parquet, compare_station.parquet
 #                             Each scenario minus the baseline scenario, one
 #                             row per metric (see R/fct_compare.R).
+#                             scenario_comparison.xlsx
+#                             The same comparisons in one workbook, with the
+#                             settings, scenarios and filter sets used.
 #
 # Run from the repo root.
 
@@ -42,6 +45,10 @@ station_output_file <- file.path(
   "runcard_stats_station.parquet"
 )
 fdz_output_file <- file.path(cfg$data_outputs_dir, "runcard_stats_fdz.parquet")
+comparison_output_file <- file.path(
+  cfg$data_outputs_dir,
+  "scenario_comparison.xlsx"
+)
 
 # Read ------------------------------------------------------------------------
 
@@ -81,11 +88,26 @@ all_stations <- sort(unique(travel_matrix$source_id))
 # Scenarios -------------------------------------------------------------------
 
 # One row per scenario: a unique id, a name, the open stations, and whether
-# it is the baseline the others are compared with (exactly one TRUE)
+# it is the baseline the others are compared with (exactly one TRUE).
+#
+# Each option moves one rescue to 16 (R26 or R11) and adds one of R1, R9 or
+# R27.
+baseline_rescues <- c(11, 14, 21, 23, 24, 26, 30)
+
+# The baseline with some stations removed and others added
+change <- function(remove = NULL, add = NULL) {
+  sort(union(setdiff(baseline_rescues, remove), add))
+}
+
 scenarios <- tibble::tribble(
-  ~scenario_id, ~scenario_name, ~stations, ~baseline,
-  1, "Current", all_stations, TRUE,
-  2, "7 stations", c(11, 14, 21, 23, 24, 26, 30), FALSE
+  ~scenario_id , ~scenario_name     , ~stations                            , ~baseline ,
+             1 , "Baseline Rescues" , baseline_rescues                     , TRUE      ,
+             2 , "R26->16 +R1"      , change(remove = 26, add = c(16, 1))  , FALSE     ,
+             3 , "R26->16 +R9"      , change(remove = 26, add = c(16, 9))  , FALSE     ,
+             4 , "R26->16 +R27"     , change(remove = 26, add = c(16, 27)) , FALSE     ,
+             5 , "R11->16 +R1"      , change(remove = 11, add = c(16, 1))  , FALSE     ,
+             6 , "R11->16 +R9"      , change(remove = 11, add = c(16, 9))  , FALSE     ,
+             7 , "R11->16 +R27"     , change(remove = 11, add = c(16, 27)) , FALSE
 )
 
 # Filter sets -----------------------------------------------------------------
@@ -98,17 +120,17 @@ scenarios <- tibble::tribble(
 #     ems_capability = "PARAMEDIC"
 #   )
 filters <- list(
-  incident_filter("All calls")
+  incident_filter("Paramedic Calls", ems_capability = 'PARAMEDIC')
 )
 
 # Due levels: 1 for 1st due, 1:3 for 1st to 3rd due
 due_levels <- 1
 
 # Comparison settings: travel-time thresholds (minutes), and bootstrap
-# confidence intervals on the overall diffs (slower; set.seed for repeatable
-# intervals)
-thresholds <- c(4, 8)
-with_ci <- FALSE
+# confidence intervals on the overall diffs (slower; the seed in
+# export_comparison() below makes them repeatable)
+thresholds <- c(8, 10, 12.37)
+with_ci <- TRUE
 
 # Stats -----------------------------------------------------------------------
 
@@ -122,31 +144,20 @@ stats_fdz <- scenarios |>
 
 # Comparisons -----------------------------------------------------------------
 
-set.seed(2026)
-compare_overall_df <- scenarios |>
-  compare_overall(
+# One run card assignment shared by all four comparisons, written to Excel with
+# the settings, scenarios and filter sets; the returned sheets are also saved
+# as parquet below
+comparison <- scenarios |>
+  export_comparison(
     travel_matrix,
     runcard,
+    file = comparison_output_file,
     filters = filters,
     due = due_levels,
     thresholds = thresholds,
-    ci = with_ci
+    ci = with_ci,
+    seed = 343
   )
-
-compare_calls_df <- scenarios |>
-  compare_calls(travel_matrix, runcard, filters = filters, due = due_levels)
-
-compare_fdz_df <- scenarios |>
-  compare_by_fdz(
-    travel_matrix,
-    runcard,
-    filters = filters,
-    due = due_levels,
-    thresholds = thresholds
-  )
-
-compare_station_df <- scenarios |>
-  compare_by_station(travel_matrix, runcard, filters = filters, due = due_levels)
 
 # Checks ----------------------------------------------------------------------
 
@@ -182,10 +193,16 @@ arrow::write_parquet(runcard, runcard_output_file, compression = "zstd")
 arrow::write_parquet(stats_station, station_output_file, compression = "zstd")
 arrow::write_parquet(stats_fdz, fdz_output_file, compression = "zstd")
 
-for (name in c("overall", "calls", "fdz", "station")) {
+compare_files <- c(
+  "Overall" = "compare_overall.parquet",
+  "Calls" = "compare_calls.parquet",
+  "By FDZ" = "compare_fdz.parquet",
+  "By Station" = "compare_station.parquet"
+)
+for (sheet in names(compare_files)) {
   arrow::write_parquet(
-    get(paste0("compare_", name, "_df")),
-    file.path(cfg$data_outputs_dir, paste0("compare_", name, ".parquet")),
+    comparison[[sheet]],
+    file.path(cfg$data_outputs_dir, compare_files[[sheet]]),
     compression = "zstd"
   )
 }
