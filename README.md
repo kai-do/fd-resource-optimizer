@@ -17,7 +17,7 @@ The repo is being rebuilt as a golem app-package, `fdresopt`.
 | Status | Quarantined. It runs, but it isn't vetted as a whole. | Vetted |
 | Rules | Moved verbatim. Only path references and the quarantine header were changed. Don't build on it. | Never `source()` or read from `legacy/`. |
 
-Vetted pieces move across by hand, one at a time: rewrite them into `R/fct_*.R`, test them in `tests/testthat/`, and compare them against `_baseline/`. `archive/pre-refactor/` is a read-only, byte-identical copy of the code before the move.
+Vetted pieces move across by hand, one at a time: rewrite them into `R/fct_*.R`, test them in `tests/testthat/`, and compare them against `_baseline/`.
 
 ## Layout
 
@@ -28,15 +28,13 @@ inst/golem-config.yml    configuration (paths, OSRM), reads FDRO_* environment v
 inst/app/www/            static assets for the app
 dev/                     golem dev scripts (command logs, not package code)
 tests/testthat/          unit tests (testthat 3e)
-analysis/                new pipeline scripts; call package functions, read paths from config
+analysis/                new pipeline scripts; call package functions, read paths from config, plus sql/ (T-SQL extracts, run by hand on the agency network)
 reports/                 new Quarto reports
 legacy/                  quarantined pre-refactor code (working)
   R/                       helpers_optimize.R, transition_helpers.R (sourced by legacy scripts)
   scripts/                 00-08 pipeline, OSRM start script, one-off scripts, archive/route_matrix.R
   app/                     legacy Shiny app (app.R) and its precomputed data/
-  sql/                     T-SQL extracts (agency network only)
   tutorials/               Quarto tutorials and their rendered output
-archive/pre-refactor/    read-only copy of all code at commit 3529e1d
 datasets/                data, outside the package build; gitignored except an allow-list
   inputs/                  dated CSV extracts (YYYY-MM-DD_<name>.csv)
   outputs/                 pipeline intermediates
@@ -45,7 +43,7 @@ _baseline/               local, gitignored: legacy outputs for comparing new cod
 renv.lock, renv/         package versions (package, tooling and legacy code)
 ```
 
-`legacy/`, `archive/`, `datasets/`, `analysis/`, `reports/`, `dev/` and `_baseline/` are excluded from the package build (`.Rbuildignore`). The Air formatter and lintr both skip `legacy/` and `archive/`.
+`legacy/`, `datasets/`, `analysis/`, `reports/`, `dev/` and `_baseline/` are excluded from the package build (`.Rbuildignore`). The Air formatter and lintr both skip `legacy/`.
 
 ## Setup
 
@@ -81,7 +79,7 @@ Run each script from the repo root, for example `source("legacy/scripts/05-get_t
 
 | Step | Inputs | Outputs |
 |---|---|---|
-| `legacy/sql/*.sql` (run by hand) | CAD/RMS databases | `datasets/inputs/<date>_cad_run_card.csv`, `_fdzs.csv`, `_incident_address_data.csv`, `_station_addresses.csv` |
+| `analysis/sql/*.sql` (run by hand) | CAD/RMS databases | `datasets/inputs/<date>_cad_run_card.csv`, `_fdzs.csv`, `_incident_address_data.csv`, `_station_addresses.csv` |
 | `00-setup_osrm_backend.R` | none | OSRM binaries in the `osrm.backend` cache |
 | `01-start_osrm_server.ps1` | `osrm-routed.exe`, prepared `.osrm` graph | OSRM server on `127.0.0.1:5000` |
 | `02-build_travel_matrix.R` | none (sourced by 03) | `build_travel_matrix()` defined |

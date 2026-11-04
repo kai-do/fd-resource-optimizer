@@ -1,4 +1,3 @@
--- LEGACY — quarantined. Not owner-vetted as a whole. Do not build new code on this; copy vetted pieces into the new structure.
 with nfirs as
 (
     select
