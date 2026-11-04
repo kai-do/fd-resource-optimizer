@@ -7,8 +7,14 @@ Description: Drive-time summaries by fire demand zone and station-placement opti
 License: MIT + file LICENSE
 Imports: 
     config,
+    dplyr,
     golem,
-    shiny
+    lubridate,
+    osrm,
+    purrr,
+    sf,
+    shiny,
+    tibble
 Encoding: UTF-8
 RoxygenNote: 7.3.3
 Suggests: 
