@@ -104,6 +104,34 @@ test_that("station_table takes several metrics for one scenario, one for several
   )
 })
 
+test_that("pct_total adds each row's share of its column's total", {
+  ft <- station_table(compare_with(compare_by_station), pct_total = TRUE)
+  b <- body(ft)
+  share <- function(x) as.numeric(sub("%", "", x))
+
+  expect_named(b, c("source_id", "n_incidents_b", "n_incidents_bp", "n_incidents_s", "n_incidents_sp", "n_incidents_d"))
+  expect_equal(sum(header_text(ft) == "% of Total"), 1) # one label text, used twice
+  station_1 <- b[b$source_id == "1", ]
+  expect_equal(c(station_1$n_incidents_bp, station_1$n_incidents_sp), c("50.0%", "0.0%"))
+  expect_equal(sum(share(b$n_incidents_bp)), 100)
+  expect_equal(sum(share(b$n_incidents_sp)), 100)
+})
+
+test_that("pct_total works with several scenarios and is off by default", {
+  ft <- station_table(compare_with(compare_by_station), scenario = c("No 1", "No 3"), pct_total = TRUE)
+  expect_true(all(c("baseline_pct", "s1_sp", "s2_sp") %in% names(body(ft))))
+
+  expect_false(any(grepl("p$", names(body(station_table(compare_with(compare_by_station)))))))
+})
+
+test_that("pct_total skips metrics that are not counts", {
+  expect_message(
+    ft <- fdz_table(compare_with(compare_by_fdz), pct_total = TRUE),
+    "only shown for counts"
+  )
+  expect_false("% of Total" %in% header_text(ft))
+})
+
 # fdz_table -------------------------------------------------------------------
 
 test_that("fdz_table shows each zone's responders and the metric diff", {
@@ -135,6 +163,82 @@ test_that("a narrow table is widened to fit its title", {
   ft <- calls_table(compare_with(compare_calls), title = strrep("Long Title ", 6))
 
   expect_gte(sum(dim(ft)$widths), nchar(strrep("Long Title ", 6)) * 0.13 - 1e-6)
+})
+
+# scenario_summary_table -------------------------------------------------------
+
+footer_text <- function(ft) {
+  chunks <- flextable::information_data_chunk(ft)
+  paste(chunks$txt[chunks$.part == "footer"], collapse = " ")
+}
+
+test_that("the summary has the baseline's values, then each scenario's diffs", {
+  cmp <- compare_with(compare_overall, thresholds = 4)
+  ft <- scenario_summary_table(cmp, baseline_name = "Baseline Rescues")
+  b <- body(ft)
+  diff_of <- function(sc, m) cmp$diff[cmp$scenario_name == sc & cmp$metric == m]
+
+  expect_equal(b$scenario, c("Baseline Rescues", "No 1", "No 3"))
+  expect_named(b, c("scenario", "median_minutes", "p90_minutes", "pct_within_4min", "total_minutes"))
+  expect_equal(b$total_minutes[1], "13")
+  expect_equal(b$total_minutes[2], "+12")
+  expect_equal(b$total_minutes[3], format_values(diff_of("No 3", "total_minutes"), "total_minutes", diff = TRUE))
+  expect_true("Change From Baseline Rescues" %in% unlist(strsplit(header_text(ft)[2], " · ")))
+})
+
+test_that("sort_by puts the best scenario first", {
+  ft <- scenario_summary_table(compare_with(compare_overall), sort_by = "total_minutes")
+  expect_equal(body(ft)$scenario, c("Baseline", "No 3", "No 1")) # No 1 adds 12 minutes
+
+  expect_error(scenario_summary_table(compare_with(compare_overall), sort_by = "speed"), "must be a column")
+  expect_error(scenario_summary_table(compare_with(compare_overall), metrics = "n_calls", sort_by = "n_calls"), "no better direction")
+})
+
+test_that("the best scenario in each column is bold", {
+  ft <- scenario_summary_table(compare_with(compare_overall))
+  bold <- ft$body$styles$text$bold$data[, "total_minutes"]
+
+  expect_equal(unname(bold), c(FALSE, FALSE, TRUE)) # No 3, not No 1 (+12)
+})
+
+test_that("calls and station columns are added when given", {
+  ft <- scenario_summary_table(
+    compare_with(compare_overall),
+    calls_df = compare_with(compare_calls, slower_by = c(2, 5)),
+    station_df = compare_with(compare_by_station)
+  )
+  b <- body(ft)
+
+  expect_true(all(c("share_slower", "calls_slower_by_5min", "busiest_station") %in% names(b)))
+  expect_equal(b$share_slower[2], "50.0%")
+  expect_equal(b$calls_slower_by_5min[2], "2") # 1A's two calls are 6 minutes slower
+  expect_equal(b$busiest_station[1], "50.0% (1)") # baseline: station 1 takes 2 of 4 calls
+  expect_match(b$busiest_station[2], "\\(7\\)$") # No 1: station 7 takes over 1A
+  expect_match(footer_text(ft), "call-level and busiest station columns are scenario values")
+})
+
+test_that("the footer only mentions the extra columns when they are shown", {
+  ft <- scenario_summary_table(compare_with(compare_overall))
+
+  expect_no_match(footer_text(ft), "call-level")
+  expect_match(footer_text(ft), "First row: baseline values")
+})
+
+test_that("a subset of scenarios can be shown, and yearly counts are labelled", {
+  ft <- scenario_summary_table(annualize_counts(compare_with(compare_overall), years = 2), scenario = "No 3")
+
+  expect_equal(body(ft)$scenario, c("Baseline", "No 3"))
+  expect_true("Total Minutes per Year" %in% header_text(ft))
+})
+
+# rank_scenarios --------------------------------------------------------------
+
+test_that("scenarios are ranked best first", {
+  cmp <- compare_with(compare_overall, thresholds = 4)
+
+  expect_equal(rank_scenarios(cmp, by = "total_minutes"), c("No 3", "No 1")) # No 1 adds 12 minutes
+  expect_error(rank_scenarios(cmp, by = "n_calls"), "no better direction")
+  expect_error(rank_scenarios(cmp, by = "speed"), "Unknown metric")
 })
 
 # calls_table -----------------------------------------------------------------

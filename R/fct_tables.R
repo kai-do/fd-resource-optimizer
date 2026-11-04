@@ -46,7 +46,7 @@ overall_table <- function(
   check_metrics(metrics, sel$df$metric)
   has_ci <- "ci_lower" %in% names(sel$df)
 
-  body <- data.frame(metric = metric_label(metrics))
+  body <- data.frame(metric = metric_label(metrics, sel$years))
   colors <- data.frame(metric = rep(NA_character_, length(metrics)))
   first <- sel$df[sel$df$scenario_name == sel$scenarios[1], ]
   body$baseline <- format_values(first$baseline[match(metrics, first$metric)], metrics)
@@ -80,7 +80,8 @@ overall_table <- function(
     colors = colors,
     n_keys = 1,
     title = title %||% "Scenario Comparison: Overall",
-    subtitle = subtitle %||% compare_subtitle(sel, baseline_name)
+    subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
+    years = sel$years
   )
 }
 
@@ -105,7 +106,7 @@ calls_table <- function(
   metrics <- metrics %||% unique(sel$df$metric)
   check_metrics(metrics, sel$df$metric)
 
-  body <- data.frame(metric = metric_label(metrics))
+  body <- data.frame(metric = metric_label(metrics, sel$years))
   colors <- data.frame(metric = rep(NA_character_, length(metrics)))
   for (k in seq_along(sel$scenarios)) {
     rows <- sel$df[sel$df$scenario_name == sel$scenarios[k], ]
@@ -127,7 +128,8 @@ calls_table <- function(
     colors = colors,
     n_keys = 1,
     title = title %||% "Scenario Comparison: Call-Level Changes",
-    subtitle = subtitle %||% compare_subtitle(sel, baseline_name)
+    subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
+    years = sel$years
   )
 }
 
@@ -137,6 +139,9 @@ calls_table <- function(
 #' @param df Output of [compare_by_fdz()].
 #' @param metrics Metric(s) to show; several only with one scenario. Default
 #'   `"median_minutes"`.
+#' @param pct_total If `TRUE`, a "% of Total" column after Baseline and after
+#'   each Scenario: the row's share of that column's total over the rows shown.
+#'   Count metrics only (calls, incidents, FDZs, total minutes).
 #'
 #' @return A flextable: one row per FDZ, with the baseline and scenario
 #'   responding stations and Baseline / Scenario / Diff for each metric.
@@ -149,7 +154,8 @@ fdz_table <- function(
   metrics = "median_minutes",
   baseline_name = "Baseline",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  pct_total = FALSE
 ) {
   rows_table(
     df, key = "fdz_id", key_label = "FDZ",
@@ -157,13 +163,15 @@ fdz_table <- function(
     title_prefix = "FDZ Comparison",
     neutral = FALSE,
     responders = TRUE,
-    title = title, subtitle = subtitle
+    title = title, subtitle = subtitle,
+    pct_total = pct_total
   )
 }
 
 #' Station workload table
 #'
 #' @inheritParams overall_table
+#' @inheritParams fdz_table
 #' @param df Output of [compare_by_station()].
 #' @param metrics Metric(s) to show; several only with one scenario. Default
 #'   `"n_incidents"`.
@@ -179,7 +187,8 @@ station_table <- function(
   metrics = "n_incidents",
   baseline_name = "Baseline",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  pct_total = FALSE
 ) {
   rows_table(
     df, key = "source_id", key_label = "Station",
@@ -187,8 +196,212 @@ station_table <- function(
     title_prefix = "Station Workload",
     neutral = TRUE,
     responders = FALSE,
-    title = title, subtitle = subtitle
+    title = title, subtitle = subtitle,
+    pct_total = pct_total
   )
+}
+
+#' Scenario summary table: every scenario's change from the baseline
+#'
+#' One row per scenario, one column per metric, so the options can be ranked
+#' side by side. The first row holds the baseline's own values; the others,
+#' each scenario minus the baseline. The best scenario in each column is bold.
+#'
+#' @param overall_df Output of [compare_overall()] (or [annualize_counts()] of
+#'   it).
+#' @param calls_df Optional output of [compare_calls()]: adds call-level
+#'   columns (`calls_metrics`), which are already relative to the baseline.
+#' @param station_df Optional output of [compare_by_station()]: adds a Busiest
+#'   Station column, the largest station's share of incidents (and its id).
+#' @param scenario Scenario names or ids to show, in order. `NULL` shows all.
+#' @param filter_name,due Filter set and due level. `NULL` uses the first (with
+#'   a message if there are others).
+#' @param metrics Overall metrics to show, in order. `NULL`: median and 90th
+#'   percentile minutes, each within-threshold share, total minutes.
+#' @param calls_metrics Call-level metrics to show when `calls_df` is given.
+#'   `NULL`: share slower and calls slower by the largest threshold.
+#' @param sort_by A metric shown in the table (or `"busiest_station"`): rows
+#'   are ordered best first. `NULL` keeps the scenario order.
+#' @param baseline_name Name of the baseline scenario, for its row and the
+#'   subtitle.
+#' @param title,subtitle Override the automatic title and subtitle.
+#'
+#' @return A flextable.
+#' @noRd
+scenario_summary_table <- function(
+  overall_df,
+  calls_df = NULL,
+  station_df = NULL,
+  scenario = NULL,
+  filter_name = NULL,
+  due = NULL,
+  metrics = NULL,
+  calls_metrics = NULL,
+  sort_by = NULL,
+  baseline_name = "Baseline",
+  title = NULL,
+  subtitle = NULL
+) {
+  overall_df <- as.data.frame(overall_df)
+  sel <- select_compare(overall_df, scenario %||% unique(overall_df$scenario_name), filter_name, due)
+  scen <- sel$scenarios
+  if (is.null(metrics)) {
+    metrics <- intersect(
+      c("median_minutes", "p90_minutes", grep("^pct_within_", unique(sel$df$metric), value = TRUE), "total_minutes"),
+      sel$df$metric
+    )
+  }
+  check_metrics(metrics, sel$df$metric)
+
+  value_of <- function(df, sc, m, col) {
+    x <- df[[col]][df$scenario_name == sc & df$metric == m]
+    if (length(x) == 0) NA_real_ else x[1]
+  }
+
+  # One entry per column: label, the baseline row's text, and per scenario the
+  # number (for sorting and best), its text and its colour
+  columns <- list()
+  for (m in metrics) {
+    d <- vapply(scen, function(sc) value_of(sel$df, sc, m, "diff"), numeric(1))
+    columns[[m]] <- list(
+      label = metric_label(m, sel$years),
+      base = format_values(value_of(sel$df, scen[1], m, "baseline"), m),
+      num = d,
+      text = format_values(d, m, diff = TRUE),
+      color = diff_colors(d, m)
+    )
+  }
+
+  if (!is.null(calls_df)) {
+    csel <- select_compare(calls_df, scen, sel$filter_name, sel$due)
+    if (is.null(calls_metrics)) {
+      slower <- grep("^calls_slower_by_", unique(csel$df$metric), value = TRUE)
+      calls_metrics <- intersect(c("share_slower", utils::tail(slower, 1)), csel$df$metric)
+    }
+    check_metrics(calls_metrics, csel$df$metric)
+    for (m in calls_metrics) {
+      v <- vapply(scen, function(sc) value_of(csel$df, sc, m, "value"), numeric(1))
+      columns[[m]] <- list(
+        label = metric_label(m, csel$years),
+        base = "",
+        num = v,
+        text = format_values(v, m),
+        color = rep(NA_character_, length(v))
+      )
+    }
+  }
+
+  if (!is.null(station_df)) {
+    ssel <- select_compare(station_df, scen, sel$filter_name, sel$due)
+    busiest <- function(rows, col) {
+      n <- ifelse(is.na(rows[[col]]), 0, rows[[col]])
+      k <- which.max(n)
+      list(share = n[k] / sum(n), station = rows$source_id[k])
+    }
+    station_rows <- function(sc) ssel$df[ssel$df$scenario_name == sc & ssel$df$metric == "n_incidents", ]
+    base <- busiest(station_rows(scen[1]), "baseline")
+    top <- lapply(scen, function(sc) busiest(station_rows(sc), "scenario"))
+    share <- vapply(top, function(x) x$share, numeric(1))
+    columns[["busiest_station"]] <- list(
+      label = "Busiest Station Share",
+      base = sprintf("%.1f%% (%s)", 100 * base$share, base$station),
+      num = share,
+      text = sprintf("%.1f%% (%s)", 100 * share, vapply(top, function(x) as.character(x$station), character(1))),
+      color = rep(NA_character_, length(share))
+    )
+  }
+
+  # lower is better for the busiest station's share: a more even workload
+  better <- function(key) {
+    if (key == "busiest_station" || higher_is_worse(key)) "low" else if (higher_is_better(key)) "high" else NA
+  }
+
+  order_rows <- seq_along(scen)
+  if (!is.null(sort_by)) {
+    if (!sort_by %in% names(columns)) {
+      stop("sort_by must be a column in the table: ", paste(names(columns), collapse = ", "), call. = FALSE)
+    }
+    if (is.na(better(sort_by))) {
+      stop("sort_by: '", sort_by, "' has no better direction", call. = FALSE)
+    }
+    num <- columns[[sort_by]]$num
+    order_rows <- order(if (better(sort_by) == "high") -num else num, na.last = TRUE)
+  }
+
+  body <- data.frame(scenario = c(baseline_name, scen[order_rows]))
+  colors <- data.frame(scenario = rep(NA_character_, nrow(body)))
+  best_cells <- list()
+  for (key in names(columns)) {
+    col <- columns[[key]]
+    body[[key]] <- c(col$base, col$text[order_rows])
+    colors[[key]] <- c(NA_character_, col$color[order_rows])
+    num <- col$num[order_rows]
+    text <- col$text[order_rows]
+    if (!is.na(better(key)) && length(unique(stats::na.omit(num))) > 1) {
+      target <- if (better(key) == "high") which.max(num) else which.min(num)
+      # ties as displayed (22.4% and 22.4%) are all best
+      best_cells[[key]] <- which(text == text[target]) + 1 # + 1 for the baseline row
+    }
+  }
+  body[is.na(body)] <- ""
+
+  labels <- c("Scenario", vapply(columns, function(x) x$label, character(1)))
+  ft <- build_table(
+    body, labels,
+    groups = NULL,
+    colors = colors,
+    n_keys = 1,
+    title = title %||% "Scenario Summary",
+    subtitle = subtitle %||% paste(
+      sel$filter_name, paste(due_ordinal(sel$due), "Due"), paste("Change From", baseline_name),
+      sep = " · "
+    ),
+    years = sel$years,
+    notes = paste0(
+      "First row: baseline values; other rows: change from baseline",
+      if (!is.null(calls_df) || !is.null(station_df)) {
+        paste0(
+          " (", paste(c(if (!is.null(calls_df)) "call-level", if (!is.null(station_df)) "busiest station"), collapse = " and "),
+          " columns are scenario values)"
+        )
+      },
+      ". Bold: best scenario in each column."
+    ),
+    max_col_width = 1.3
+  )
+
+  ft <- flextable::italic(ft, i = 1, part = "body")
+  ft <- flextable::hline(ft, i = 1, border = officer::fp_border(color = "#BBBBBB"), part = "body")
+  for (key in names(best_cells)) {
+    ft <- flextable::bold(ft, i = best_cells[[key]], j = key, part = "body")
+  }
+  ft
+}
+
+#' Scenarios ranked best first on an overall metric
+#'
+#' @param df Output of [compare_overall()] (or [annualize_counts()] of it).
+#' @param by Metric whose diff from the baseline ranks the scenarios: lower is
+#'   better for minutes, distance and unserved calls, higher for
+#'   within-threshold shares.
+#' @param filter_name,due Filter set and due level. `NULL` uses the first (with
+#'   a message if there are others).
+#'
+#' @return Scenario names, best first.
+#' @noRd
+rank_scenarios <- function(df, by = "total_minutes", filter_name = NULL, due = NULL) {
+  df <- as.data.frame(df)
+  sel <- select_compare(df, unique(df$scenario_name), filter_name, due)
+  check_metrics(by, sel$df$metric)
+  rows <- sel$df[sel$df$metric == by, ]
+  if (higher_is_better(by)) {
+    rows <- rows[order(-rows$diff), ]
+  } else if (higher_is_worse(by)) {
+    rows <- rows[order(rows$diff), ]
+  } else {
+    stop("'", by, "' has no better direction to rank by", call. = FALSE)
+  }
+  rows$scenario_name
 }
 
 #' Save a table to Word or PNG
@@ -214,12 +427,15 @@ save_table <- function(ft, path) {
 
 rows_table <- function(
   df, key, key_label, scenario, filter_name, due, metrics, baseline_name,
-  title_prefix, neutral, responders, title, subtitle
+  title_prefix, neutral, responders, title, subtitle, pct_total = FALSE
 ) {
   sel <- select_compare(df, scenario, filter_name, due)
   check_metrics(metrics, sel$df$metric)
   if (length(sel$scenarios) > 1 && length(metrics) > 1) {
     stop("With several scenarios, pick one metric", call. = FALSE)
+  }
+  if (pct_total && !any(is_count(metrics))) {
+    message("% of Total is only shown for counts (e.g. n_incidents, total_minutes), not ", paste(metrics, collapse = ", "))
   }
 
   sub <- sel$df[sel$df$metric %in% metrics, ]
@@ -263,14 +479,24 @@ rows_table <- function(
       b <- fill_zero(get(sc, m, "baseline"), m)
       s <- fill_zero(get(sc, m, "scenario"), m)
       d <- if (neutral && is_count(m)) s - b else get(sc, m, "diff")
+      with_pct <- pct_total && is_count(m)
       body[[paste0(m, "_b")]] <- format_values(b, m)
+      if (with_pct) body[[paste0(m, "_bp")]] <- format_pct_of_total(b)
       body[[paste0(m, "_s")]] <- format_values(s, m)
+      if (with_pct) body[[paste0(m, "_sp")]] <- format_pct_of_total(s)
       body[[paste0(m, "_d")]] <- format_values(d, m, diff = TRUE)
       colors[[paste0(m, "_b")]] <- NA_character_
+      if (with_pct) colors[[paste0(m, "_bp")]] <- NA_character_
       colors[[paste0(m, "_s")]] <- NA_character_
+      if (with_pct) colors[[paste0(m, "_sp")]] <- NA_character_
       colors[[paste0(m, "_d")]] <- diff_color(d, m)
-      labels <- c(labels, "Baseline", "Scenario", "Diff")
-      groups <- c(groups, rep(metric_label(m), 3))
+      new <- if (with_pct) {
+        c("Baseline", "% of Total", "Scenario", "% of Total", "Diff")
+      } else {
+        c("Baseline", "Scenario", "Diff")
+      }
+      labels <- c(labels, new)
+      groups <- c(groups, rep(metric_label(m, sel$years), length(new)))
     }
     groups <- if (length(metrics) > 1) groups
   } else {
@@ -282,10 +508,17 @@ rows_table <- function(
       b <- if (is.null(b)) x else ifelse(is.na(b), x, b)
     }
     b <- fill_zero(b, m)
+    with_pct <- pct_total && is_count(m)
     body$baseline <- format_values(b, m)
     colors$baseline <- NA_character_
     labels <- c(labels, "Baseline")
     groups <- c(groups, NA)
+    if (with_pct) {
+      body$baseline_pct <- format_pct_of_total(b)
+      colors$baseline_pct <- NA_character_
+      labels <- c(labels, "% of Total")
+      groups <- c(groups, NA)
+    }
     for (k in seq_along(sel$scenarios)) {
       sc <- sel$scenarios[k]
       s <- fill_zero(get(sc, m, "scenario"), m)
@@ -298,10 +531,16 @@ rows_table <- function(
         new <- "Station"
       }
       body[[paste0("s", k, "_s")]] <- format_values(s, m)
-      body[[paste0("s", k, "_d")]] <- format_values(d, m, diff = TRUE)
       colors[[paste0("s", k, "_s")]] <- NA_character_
+      new <- c(new, "Scenario")
+      if (with_pct) {
+        body[[paste0("s", k, "_sp")]] <- format_pct_of_total(s)
+        colors[[paste0("s", k, "_sp")]] <- NA_character_
+        new <- c(new, "% of Total")
+      }
+      body[[paste0("s", k, "_d")]] <- format_values(d, m, diff = TRUE)
       colors[[paste0("s", k, "_d")]] <- diff_color(d, m)
-      new <- c(new, "Scenario", "Diff")
+      new <- c(new, "Diff")
       labels <- c(labels, new)
       groups <- c(groups, rep(sc, length(new)))
     }
@@ -313,8 +552,9 @@ rows_table <- function(
     groups = groups,
     colors = colors,
     n_keys = n_keys,
-    title = title %||% if (length(metrics) == 1) paste0(title_prefix, ": ", metric_label(metrics)) else title_prefix,
-    subtitle = subtitle %||% compare_subtitle(sel, baseline_name)
+    title = title %||% if (length(metrics) == 1) paste0(title_prefix, ": ", metric_label(metrics, sel$years)) else title_prefix,
+    subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
+    years = sel$years
   )
 }
 
@@ -342,7 +582,14 @@ select_compare <- function(df, scenario, filter_name, due) {
       )
     }
   }
-  list(df = df[df$scenario_name %in% scenarios, ], scenarios = scenarios, filter_name = filter_name, due = due)
+  list(
+    df = df[df$scenario_name %in% scenarios, ],
+    scenarios = scenarios,
+    filter_name = filter_name,
+    due = due,
+    # from annualize_counts(): counts are yearly averages over this many years
+    years = if ("years" %in% names(df)) df$years[1]
+  )
 }
 
 pick_one <- function(values, given, label) {
@@ -420,9 +667,10 @@ metric_labels <- c(
 
 # Title Case (AP style: words of four or more letters capitalised, so "With"
 # and "Over" but "by") label for each metric; threshold metrics carry their
-# minutes
-metric_label <- function(metric) {
-  vapply(metric, function(m) {
+# minutes. With `years` (counts from annualize_counts()), call counts end in
+# "per Year".
+metric_label <- function(metric, years = NULL) {
+  labels <- vapply(metric, function(m) {
     if (m %in% names(metric_labels)) {
       return(metric_labels[[m]])
     }
@@ -434,6 +682,11 @@ metric_label <- function(metric) {
     if (grepl("^share_slower_by_", m)) return(paste0("Share Slower by More Than ", x, " Min"))
     tools::toTitleCase(gsub("_", " ", m))
   }, character(1), USE.NAMES = FALSE)
+  if (!is.null(years)) {
+    yearly <- is_call_count(metric)
+    labels[yearly] <- paste(labels[yearly], "per Year")
+  }
+  labels
 }
 
 is_share <- function(m) grepl("^(pct_within_|share_)", m)
@@ -466,6 +719,12 @@ format_values <- function(x, metrics, diff = FALSE) {
   out
 }
 
+# Each value as a percent of the column's total (the rows shown)
+format_pct_of_total <- function(x) {
+  total <- sum(x, na.rm = TRUE)
+  ifelse(is.na(x) | total == 0, "", sprintf("%.1f%%", 100 * x / total))
+}
+
 format_pct_diff <- function(x, metrics) {
   ifelse(is.na(x) | is_share(metrics), "", sprintf("%+.1f%%", x * 100))
 }
@@ -480,18 +739,22 @@ format_ci <- function(lower, upper, metrics) {
 worse_colour <- "#B00020"
 better_colour <- "#1B7F3B"
 
+# Which way is better for a metric; neither for workload counts like n_calls
+higher_is_better <- function(m) grepl("^(pct_within_|calls_within_|share_faster)", m)
+higher_is_worse <- function(m) {
+  !higher_is_better(m) &
+    grepl("minutes$|_change$|^mean_distance|^unserved_|^fdz_p90_over_|^calls_slower_by_|^share_slower", m)
+}
+
 diff_colors <- function(x, metrics) {
   metrics <- rep_len(metrics, length(x))
-  higher_is_better <- grepl("^(pct_within_|calls_within_|share_faster)", metrics)
-  higher_is_worse <- !higher_is_better &
-    grepl("minutes$|_change$|^mean_distance|^unserved_|^fdz_p90_over_|^calls_slower_by_|^share_slower", metrics)
   out <- rep(NA_character_, length(x))
   up <- !is.na(x) & x > 0
   down <- !is.na(x) & x < 0
-  out[up & higher_is_worse] <- worse_colour
-  out[down & higher_is_worse] <- better_colour
-  out[up & higher_is_better] <- better_colour
-  out[down & higher_is_better] <- worse_colour
+  out[up & higher_is_worse(metrics)] <- worse_colour
+  out[down & higher_is_worse(metrics)] <- better_colour
+  out[up & higher_is_better(metrics)] <- better_colour
+  out[down & higher_is_better(metrics)] <- worse_colour
   out
 }
 
@@ -505,8 +768,13 @@ neutral_colors <- function(x) {
 # A styled flextable from display text. `labels` name every column; `groups`
 # (or NULL) gives a spanner label per column, NA for none; `colors` holds a
 # text colour per cell (NA for default); the first `n_keys` columns are row
-# labels.
-build_table <- function(body, labels, groups, colors, n_keys, title, subtitle) {
+# labels. `years` (or NULL) adds a footer line saying the counts are yearly;
+# `notes` are added to the footer; `max_col_width` (inches) caps the value
+# columns so long headers wrap.
+build_table <- function(
+  body, labels, groups, colors, n_keys, title, subtitle,
+  years = NULL, notes = NULL, max_col_width = NULL
+) {
   names(colors) <- names(body)
   ft <- flextable::flextable(body)
   ft <- flextable::set_header_labels(ft, values = stats::setNames(as.list(labels), names(body)))
@@ -543,15 +811,25 @@ build_table <- function(body, labels, groups, colors, n_keys, title, subtitle) {
   ft <- flextable::bold(ft, i = 2, bold = FALSE, part = "header")
   ft <- flextable::align(ft, i = 1:2, align = "left", part = "header")
   note <- "Modelled OSRM drive time; CAD run card order. Diff = scenario minus baseline."
-  ft <- flextable::add_footer_lines(ft, note)
+  if (!is.null(years)) {
+    note <- paste0(note, " Call counts are yearly averages over ", sprintf("%.1f", years), " years.")
+  }
+  # extra notes go on their own lines, which wrap rather than widen the table
+  ft <- flextable::add_footer_lines(ft, c(note, notes))
   ft <- flextable::fontsize(ft, size = 8, part = "footer")
   ft <- flextable::font(ft, fontname = "Calibri", part = "all")
   ft <- flextable::autofit(ft)
 
+  widths <- dim(ft)$widths
+  if (!is.null(max_col_width)) {
+    value_cols <- setdiff(seq_along(widths), seq_len(n_keys))
+    ft <- flextable::width(ft, j = value_cols, width = pmin(widths[value_cols], max_col_width))
+    widths <- dim(ft)$widths
+  }
+
   # autofit sizes columns to the data only; widen a narrow table so the title,
   # subtitle and note fit on one line (rough inches per character at their
   # font sizes)
-  widths <- dim(ft)$widths
   needed <- max(nchar(title) * 0.13, nchar(subtitle) * 0.085, nchar(note) * 0.06)
   if (sum(widths) < needed) {
     ft <- flextable::width(ft, width = widths * needed / sum(widths))

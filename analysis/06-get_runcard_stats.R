@@ -24,8 +24,11 @@
 #                             scenario_comparison.xlsx
 #                             The same comparisons in one workbook, with the
 #                             settings, scenarios and filter sets used.
-#                             tables/*.docx, tables/*.png
-#                             Example print-ready tables (R/fct_tables.R).
+#                             scenarios.parquet
+#                             The scenarios: id, name, stations, baseline.
+#                             filter_years.parquet
+#                             Dates and years each filter set covers, for
+#                             yearly averages (step 07).
 #
 # Run from the repo root.
 
@@ -51,6 +54,8 @@ comparison_output_file <- file.path(
   cfg$data_outputs_dir,
   "scenario_comparison.xlsx"
 )
+scenarios_output_file <- file.path(cfg$data_outputs_dir, "scenarios.parquet")
+years_output_file <- file.path(cfg$data_outputs_dir, "filter_years.parquet")
 
 # Read ------------------------------------------------------------------------
 
@@ -125,7 +130,11 @@ scenarios <- tibble::tribble(
 #     ems_capability = "PARAMEDIC"
 #   )
 filters <- list(
-  incident_filter("Paramedic Calls", ems_capability = 'PARAMEDIC')
+  incident_filter(
+    "Paramedic Calls, Last 3 Years",
+    date_range = c("2023-10-01", "2026-09-30"),
+    ems_capability = "PARAMEDIC"
+  )
 )
 
 # Due levels: 1 for 1st due, 1:3 for 1st to 3rd due
@@ -212,89 +221,11 @@ for (sheet in names(compare_files)) {
   )
 }
 
-# Tables (examples) -----------------------------------------------------------
+# The scenarios (step 07 takes the baseline's name from them) and the years
+# each filter set covers, for yearly averages in step 07: a filter set's
+# date_range, or the data's first to last date if it has none
+arrow::write_parquet(scenarios, scenarios_output_file, compression = "zstd")
 
-# Print-ready tables from the comparisons (R/fct_tables.R). Each shows one
-# scenario against the baseline (Baseline / Scenario / Diff) unless you pass
-# several scenarios. print(ft) shows a table in the Viewer; save_table() writes
-# .docx (an editable Word table) or .png. With several filter sets or due
-# levels, pick one with filter_name = and due = (the first is the default).
-tables_dir <- file.path(cfg$data_outputs_dir, "tables")
-dir.create(tables_dir, showWarnings = FALSE)
-
-baseline_name <- scenarios$scenario_name[scenarios$baseline]
-example_scenario <- "R26->16 +R1"
-
-# 1. Overall: one scenario vs the baseline, default metrics
-overall_ft <- overall_table(
-  comparison$Overall,
-  scenario = example_scenario,
-  baseline_name = baseline_name
-)
-save_table(overall_ft, file.path(tables_dir, "overall.docx"))
-
-# 2. Overall, only the metrics you want, in your order
-overall_short_ft <- overall_table(
-  comparison$Overall,
-  scenario = example_scenario,
-  metrics = c(
-    "n_calls",
-    "median_minutes",
-    "p90_minutes",
-    "total_minutes",
-    "pct_within_8min"
-  ),
-  baseline_name = baseline_name,
-  title = "Moving R26 to 16 and Adding R1"
-)
-save_table(overall_short_ft, file.path(tables_dir, "overall_short.png"))
-
-# 3. Calls: how individual calls change (faster, slower, by how much)
-calls_ft <- calls_table(
-  comparison$Calls,
-  scenario = example_scenario,
-  baseline_name = baseline_name
-)
-save_table(calls_ft, file.path(tables_dir, "calls.docx"))
-
-# 4. Stations: workload per station, several metrics for one scenario
-station_ft <- station_table(
-  comparison$`By Station`,
-  scenario = example_scenario,
-  metrics = c("n_incidents", "n_fdz", "total_minutes"),
-  baseline_name = baseline_name
-)
-save_table(station_ft, file.path(tables_dir, "station.docx"))
-
-# 5. Stations: two scenarios side by side (one metric; Baseline shown once)
-station_two_ft <- station_table(
-  comparison$`By Station`,
-  scenario = c("R26->16 +R1", "R11->16 +R1"),
-  metrics = "n_incidents",
-  baseline_name = baseline_name
-)
-save_table(station_two_ft, file.path(tables_dir, "station_two.png"))
-
-# 6. FDZs: only the zones whose responder changes
-by_fdz <- comparison$`By FDZ`
-changed_fdz <- by_fdz[
-  by_fdz$scenario_name == example_scenario & by_fdz$responder_changed,
-]
-fdz_ft <- fdz_table(
-  changed_fdz,
-  scenario = example_scenario,
-  metrics = c("median_minutes", "p90_minutes"),
-  baseline_name = baseline_name
-)
-save_table(fdz_ft, file.path(tables_dir, "fdz_changed.docx"))
-
-# 7. One overall table per scenario, e.g. overall_R26_16_R1.png
-for (name in scenarios$scenario_name[!scenarios$baseline]) {
-  file_name <- paste0("overall_", gsub("[^A-Za-z0-9]+", "_", name), ".png")
-  overall_table(
-    comparison$Overall,
-    scenario = name,
-    baseline_name = baseline_name
-  ) |>
-    save_table(file.path(tables_dir, file_name))
-}
+years <- filter_years(filters, travel_matrix)
+print(years)
+arrow::write_parquet(years, years_output_file, compression = "zstd")
