@@ -6,9 +6,9 @@
   "github.copilot.editor.enableAutoCompletions": false,
   "github.copilot.nextEditSuggestions.enabled": false,
   "editor.quickSuggestions": {
-    "other": "off",
+    "other": "on",
     "comments": "off",
-    "strings": "off"
+    "strings": "on"
   },
   "[r]": {
     "editor.formatOnSave": true,

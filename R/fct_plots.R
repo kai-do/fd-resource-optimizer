@@ -10,10 +10,14 @@
 #   travel_time_boxplot(paired, by = "station", split_changed = TRUE)
 #   travel_time_boxplot(paired, by = "fdz", include_unchanged = FALSE)
 #   p |> save_plot("overall.png")
+#
+# And a cumulative curve per group (% of calls reached within X minutes):
+#
+#   travel_time_ecdf(paired, baseline_name = "Baseline Rescues", benchmarks = c("8 min" = 8))
 
-#' Box plots of modelled travel time, baseline and scenarios
+#' Box plots of modeled travel time, baseline and scenarios
 #'
-#' One box per group (the baseline or a scenario) over its calls' modelled
+#' One box per group (the baseline or a scenario) over its calls' modeled
 #' drive minutes. Calls a side can't serve (`NA` minutes) are left out of that
 #' side's box only, so a box can hold a few calls fewer than another.
 #'
@@ -50,9 +54,9 @@
 #'   also left out of the axis range.
 #' @param title,subtitle Override the automatic title and subtitle.
 #'
-#' @return A ggplot. Up to 8 scenarios get their own colour, in the order
+#' @return A ggplot. Up to 8 scenarios get their own color, in the order
 #'   given; the baseline is gray. Overall plots with more than 8 share one
-#'   colour (the axis labels name them); station and FDZ plots need 8 or
+#'   color (the axis labels name them); station and FDZ plots need 8 or
 #'   fewer.
 #' @noRd
 travel_time_boxplot <- function(
@@ -151,7 +155,7 @@ travel_time_boxplot <- function(
     orientation = if (horizontal) "y" else "x",
     position = ggplot2::position_dodge2(preserve = "single", reverse = horizontal),
     width = 0.7,
-    colour = plot_ink[["secondary"]],
+    color = plot_ink[["secondary"]],
     linewidth = 0.4,
     outliers = outliers,
     outlier.size = 0.8,
@@ -159,20 +163,16 @@ travel_time_boxplot <- function(
   )
 
   minutes_scale <- if (horizontal) ggplot2::scale_x_continuous else ggplot2::scale_y_continuous
-  minutes_labels <- if (time_format == "mmss") {
-    function(x) vapply(x, function(v) if (is.na(v)) "" else format_mmss(v), character(1))
-  } else {
-    ggplot2::waiver()
-  }
-  minutes_title <- if (time_format == "mmss") "Travel Time (m:ss)" else "Travel Time (min)"
+  minutes_labels <- minutes_axis_labels(time_format)
+  minutes_title <- minutes_axis_title(time_format)
   category_title <- switch(by, overall = NULL, station = "Territory Station", fdz = "FDZ")
 
   if (is.null(title)) {
     title <- switch(
       by,
-      overall = "Modelled Travel Time",
-      station = "Modelled Travel Time by Station Territory",
-      fdz = "Modelled Travel Time by FDZ"
+      overall = "Modeled Travel Time",
+      station = "Modeled Travel Time by Station Territory",
+      fdz = "Modeled Travel Time by FDZ"
     )
   }
   if (is.null(subtitle)) {
@@ -206,6 +206,152 @@ travel_time_boxplot <- function(
     plot_theme(horizontal, legend = by != "overall")
 }
 
+#' Cumulative modeled travel time, baseline and scenarios overlaid
+#'
+#' One line per group (the baseline or a scenario): the share of its calls
+#' reached within each number of minutes. Calls a side can't serve (`NA`
+#' minutes) are left out of that side's line only.
+#'
+#' @inheritParams travel_time_boxplot
+#' @param include_unchanged `FALSE` keeps only the calls whose responding
+#'   station changes in any selected scenario, and adds "Changed only" to the
+#'   automatic subtitle.
+#' @param benchmarks Minutes to mark with a dashed vertical line, e.g.
+#'   `c(4, 8)`. Names become the labels (`c("NFPA" = 8)`); unnamed ones are
+#'   labeled with the time ("8 min", or "8:00" with `time_format = "mmss"`).
+#' @param max_minutes Cut the x axis off here. A zoom only: the percentages
+#'   still count every call.
+#' @param curve `"line"` (straight lines across each 0.1-minute rounding
+#'   step; smooth) or `"step"` (the exact staircase of the rounded times).
+#'
+#' @return A ggplot. Up to 8 scenarios get their own color, in the order
+#'   given; the baseline is gray.
+#' @noRd
+travel_time_ecdf <- function(
+  df,
+  scenario = NULL,
+  stations = NULL,
+  fdz = NULL,
+  filter_name = NULL,
+  due = NULL,
+  baseline_name = "Baseline",
+  include_unchanged = TRUE,
+  benchmarks = NULL,
+  time_format = c("decimal", "mmss"),
+  max_minutes = NULL,
+  curve = c("line", "step"),
+  title = NULL,
+  subtitle = NULL
+) {
+  time_format <- match.arg(time_format)
+  curve <- match.arg(curve)
+  if (!is.null(benchmarks) && (!is.numeric(benchmarks) || anyNA(benchmarks))) {
+    stop("benchmarks must be numeric minutes, e.g. c(4, 8)", call. = FALSE)
+  }
+
+  df <- as.data.frame(df)
+  filter_name <- pick_one(df$filter_name, filter_name, "filter set")
+  due <- pick_one(df$due, due, "due level")
+  df <- df[df$filter_name == filter_name & df$due == due, ]
+
+  if (!is.null(stations) && !"station_id" %in% names(df)) {
+    stop(
+      "df has no station_id column; re-run step 06 to save paired_calls.parquet with it",
+      call. = FALSE
+    )
+  }
+  check_ids(stations, df$station_id, "station")
+  check_ids(fdz, df$fdz_id, "FDZ")
+
+  groups <- plot_groups(df, scenario, baseline_name)
+  if (!include_unchanged && all(groups == baseline_name)) {
+    stop("include_unchanged = FALSE needs at least one scenario besides the baseline", call. = FALSE)
+  }
+  long <- plot_times_long(df, groups, baseline_name)
+  if (!is.null(stations)) {
+    long <- long[long$station_id %in% stations, ]
+  }
+  if (!is.null(fdz)) {
+    long <- long[long$fdz_id %in% fdz, ]
+  }
+  if (!include_unchanged) {
+    long <- long[long$changed, ]
+    if (nrow(long) == 0) {
+      stop("No calls change responder in the selected scenarios", call. = FALSE)
+    }
+  }
+  if (nrow(long) == 0) {
+    stop("No calls left to plot", call. = FALSE)
+  }
+
+  if (is.null(title)) {
+    title <- "Cumulative Modeled Travel Time"
+  }
+  if (is.null(subtitle)) {
+    subtitle <- paste(filter_name, paste(due_ordinal(due), "Due"), sep = " · ")
+    if (!include_unchanged) {
+      subtitle <- paste(subtitle, "Changed only", sep = " · ")
+    }
+  }
+
+  # Dashed line per benchmark, its name along the top
+  marks <- NULL
+  if (length(benchmarks) > 0) {
+    labels <- names(benchmarks)
+    if (is.null(labels)) {
+      labels <- rep("", length(benchmarks))
+    }
+    unnamed <- is.na(labels) | labels == ""
+    labels[unnamed] <- if (time_format == "mmss") {
+      vapply(benchmarks[unnamed], format_mmss, character(1))
+    } else {
+      paste(format(benchmarks[unnamed], trim = TRUE), "min")
+    }
+    marks <- list(
+      ggplot2::geom_vline(
+        xintercept = unname(benchmarks),
+        linetype = "dashed",
+        color = plot_ink[["muted"]],
+        linewidth = 0.4
+      ),
+      ggplot2::annotate(
+        "text",
+        x = unname(benchmarks),
+        y = 1,
+        label = labels,
+        angle = 90,
+        hjust = 1,
+        vjust = -0.4,
+        size = 3,
+        color = plot_ink[["secondary"]]
+      )
+    )
+  }
+
+  curve_layer <- if (curve == "step") {
+    ggplot2::stat_ecdf(ggplot2::aes(x = minutes, color = group), geom = "step", pad = FALSE, linewidth = 0.7)
+  } else {
+    ggplot2::geom_line(
+      data = ecdf_points(long),
+      ggplot2::aes(x = minutes, y = reached, color = group),
+      linewidth = 0.7
+    )
+  }
+
+  ggplot2::ggplot(long) +
+    curve_layer +
+    marks +
+    ggplot2::scale_x_continuous(labels = minutes_axis_labels(time_format)) +
+    ggplot2::scale_y_continuous(breaks = seq(0, 1, 0.25), labels = function(x) paste0(round(x * 100), "%")) +
+    ggplot2::coord_cartesian(xlim = if (is.null(max_minutes)) NULL else c(0, max_minutes), ylim = c(0, 1)) +
+    ggplot2::scale_color_manual(values = group_colors(groups, baseline_name, "station"), name = NULL) +
+    ggplot2::labs(title = title, subtitle = subtitle, x = minutes_axis_title(time_format), y = "Calls Reached") +
+    plot_theme(horizontal = FALSE, legend = TRUE) +
+    ggplot2::theme(
+      panel.grid.major.x = ggplot2::element_line(color = plot_ink[["grid"]], linewidth = 0.3)
+    )
+}
+
 #' Save a plot to an image file
 #'
 #' @param p A ggplot, e.g. from [travel_time_boxplot()].
@@ -225,7 +371,7 @@ save_plot <- function(p, path, width = 8, height = 6) {
 
 # Internals -------------------------------------------------------------------
 
-# Categorical colours in fixed order (validated for colour-blind separation);
+# Categorical colors in fixed order (validated for color-blind separation);
 # the baseline is a neutral gray, so scenarios stand out against it
 plot_colors <- c("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
 plot_baseline_color <- "#a3a29b"
@@ -306,12 +452,42 @@ group_colors <- function(groups, baseline_name, by) {
     scen_colors <- rep(plot_colors[1], length(scen))
   } else {
     stop(
-      "At most ", length(plot_colors), " scenarios can be told apart by colour; ",
+      "At most ", length(plot_colors), " scenarios can be told apart by color; ",
       "pick fewer with `scenario`",
       call. = FALSE
     )
   }
   stats::setNames(c(plot_baseline_color, scen_colors)[match(groups, c(baseline_name, scen))], groups)
+}
+
+# Cumulative curve points per group, for straight lines between them. osrm
+# rounds drive times to 0.1 min, so a time shown as 7.3 is really somewhere in
+# 7.25-7.35. With calls spread evenly inside that window, the true curve rises
+# in a straight line across it: from (min - 0.05, 0) through each
+# (time + 0.05, share reached).
+ecdf_points <- function(long, resolution = 0.1) {
+  half <- resolution / 2
+  parts <- lapply(split(long$minutes, long$group, drop = TRUE), function(m) {
+    v <- sort(unique(m))
+    data.frame(minutes = c(v[1] - half, v + half), reached = c(0, stats::ecdf(m)(v)))
+  })
+  out <- do.call(rbind, Map(function(g, d) cbind(group = g, d), names(parts), parts))
+  out$group <- factor(out$group, levels = levels(long$group))
+  rownames(out) <- NULL
+  out
+}
+
+# Minutes axis labels and title, as decimal minutes or m:ss
+minutes_axis_labels <- function(time_format) {
+  if (time_format == "mmss") {
+    function(x) vapply(x, function(v) if (is.na(v)) "" else format_mmss(v), character(1))
+  } else {
+    ggplot2::waiver()
+  }
+}
+
+minutes_axis_title <- function(time_format) {
+  if (time_format == "mmss") "Travel Time (m:ss)" else "Travel Time (min)"
 }
 
 # Minimal theme: quiet gridlines along the minutes axis only, legend below
@@ -320,16 +496,16 @@ plot_theme <- function(horizontal, legend) {
   theme <- ggplot2::theme_minimal(base_size = 11) +
     ggplot2::theme(
       plot.title.position = "plot",
-      plot.title = ggplot2::element_text(colour = plot_ink[["primary"]], face = "bold"),
-      plot.subtitle = ggplot2::element_text(colour = plot_ink[["secondary"]]),
-      axis.title = ggplot2::element_text(colour = plot_ink[["secondary"]]),
-      axis.text = ggplot2::element_text(colour = plot_ink[["secondary"]]),
+      plot.title = ggplot2::element_text(color = plot_ink[["primary"]], face = "bold"),
+      plot.subtitle = ggplot2::element_text(color = plot_ink[["secondary"]]),
+      axis.title = ggplot2::element_text(color = plot_ink[["secondary"]]),
+      axis.text = ggplot2::element_text(color = plot_ink[["secondary"]]),
       panel.grid.minor = ggplot2::element_blank(),
-      panel.grid.major = ggplot2::element_line(colour = plot_ink[["grid"]], linewidth = 0.3),
+      panel.grid.major = ggplot2::element_line(color = plot_ink[["grid"]], linewidth = 0.3),
       strip.placement = "outside",
-      strip.text = ggplot2::element_text(colour = plot_ink[["secondary"]], face = "bold"),
+      strip.text = ggplot2::element_text(color = plot_ink[["secondary"]], face = "bold"),
       legend.position = if (legend) "bottom" else "none",
-      legend.text = ggplot2::element_text(colour = plot_ink[["secondary"]])
+      legend.text = ggplot2::element_text(color = plot_ink[["secondary"]])
     )
   theme + do.call(ggplot2::theme, stats::setNames(list(ggplot2::element_blank()), category_grid))
 }

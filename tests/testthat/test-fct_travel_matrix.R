@@ -23,7 +23,7 @@ make_destinations <- function(n = 5) {
 }
 
 # Stand-in for osrm::osrmTable(). Distance from source s to destination d is
-# 1000 * s + d metres and the duration is a tenth of that in minutes. The
+# 1000 * s + d meters and the duration is a tenth of that in minutes. The
 # snapped points are the input points, so snap distances are 0.
 fake_osrm_table <- function(src, dst, measure, ...) {
   src_xy <- sf::st_coordinates(src)

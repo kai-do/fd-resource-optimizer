@@ -86,10 +86,10 @@ test_that("territory_travel uses the column it is given", {
   expect_equal(out$duration_min, c(3, 6, 2))
 })
 
-# summarise_travel_stats ------------------------------------------------------
+# summarize_travel_stats ------------------------------------------------------
 
-test_that("summarise_travel_stats by station and zone matches hand calculation", {
-  out <- summarise_travel_stats(make_matrix_df())
+test_that("summarize_travel_stats by station and zone matches hand calculation", {
+  out <- summarize_travel_stats(make_matrix_df())
 
   expect_equal(out$source_id, c(1L, 1L, 2L, 2L))
   expect_equal(out$fdz_id, c("1A", "2B", "1A", "2B"))
@@ -101,16 +101,16 @@ test_that("summarise_travel_stats by station and zone matches hand calculation",
   expect_equal(out$mean_distance_m[1], 4500)
 })
 
-test_that("summarise_travel_stats reports the first and last alarm per group", {
-  out <- summarise_travel_stats(make_matrix_df())
+test_that("summarize_travel_stats reports the first and last alarm per group", {
+  out <- summarize_travel_stats(make_matrix_df())
   row <- out[out$source_id == 1 & out$fdz_id == "1A", ]
 
   expect_equal(format(row$min_incident_alarm_dt, "%Y-%m-%d"), "2024-01-01")
   expect_equal(format(row$max_incident_alarm_dt, "%Y-%m-%d"), "2024-02-01")
 })
 
-test_that("summarise_travel_stats groups by the columns it is given", {
-  out <- summarise_travel_stats(closest_station(make_matrix_df()), by = "fdz_id")
+test_that("summarize_travel_stats groups by the columns it is given", {
+  out <- summarize_travel_stats(closest_station(make_matrix_df()), by = "fdz_id")
 
   expect_equal(out$fdz_id, c("1A", "2B"))
   # zone 1A, closest times: I1 3 (station 1), I2 4 (station 2)

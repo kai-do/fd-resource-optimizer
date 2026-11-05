@@ -86,7 +86,6 @@ scenario_summary_table(
   metrics = c(
     "total_minutes",
     "p90_minutes",
-    "pct_within_8min",
     "pct_within_8m58s", # 8:58, EMS High First Unit
     "pct_within_10m21s" # 10:21, EMS High ERF
   ),
@@ -100,7 +99,7 @@ scenario_summary_table(
   subtitle = NULL,
   time_format = 'mmss'
 ) |>
-  save_table(file.path(tables_dir, "tbl_overall.docx"))
+  save_table(file.path(tables_dir, "tbl_scenario_summary.docx"))
 
 # Example tables, every argument and metric spelled out ------------------------
 #
@@ -117,8 +116,8 @@ scenarios <- rank_scenarios(
 )
 
 scenario_1_r1_r26 <- scenarios[1]
-scenario_1_r1 <- scenarios[2]
-scenario_1_r1_r11 <- scenarios[3]
+scenario_2_r1 <- scenarios[2]
+scenario_3_r1_r11 <- scenarios[3]
 
 # Overall: one row per metric; Baseline / Scenario / Diff / % Diff (and 95% CI)
 overall_table(
@@ -133,26 +132,133 @@ overall_table(
     "p90_minutes",
     "total_minutes",
     "mean_distance_m",
-    "calls_within_8min",
-    "pct_within_8min",
-    #"pct_within_10min",
-    #"calls_within_10min",
     "calls_within_8m58s", # 8:58, EMS High First Unit
     "pct_within_8m58s",
     "calls_within_10m21s", # 10:21, EMS High ERF
     "pct_within_10m21s",
     "fdz_p90_over_8min",
-    #"fdz_p90_over_10min",
     "fdz_p90_over_8m58s",
     "fdz_p90_over_10m21s"
-    #"unserved_zones",
-    #"unserved_calls"
   ),
   baseline_name = baseline_name,
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  time_format = "mmss"
 ) |>
-  save_table(file.path(tables_dir, "tbl_example_overall.docx"))
+  save_table(file.path(tables_dir, "tbl_overall_scenario_1_r1_r26.docx"))
+
+overall_table(
+  df = cmp_overall,
+  scenario = scenario_2_r1,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_calls",
+    "mean_minutes",
+    "median_minutes",
+    "p90_minutes",
+    "total_minutes",
+    "mean_distance_m",
+    "calls_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_8m58s",
+    "calls_within_10m21s", # 10:21, EMS High ERF
+    "pct_within_10m21s",
+    "fdz_p90_over_8min",
+    "fdz_p90_over_8m58s",
+    "fdz_p90_over_10m21s"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  time_format = "mmss"
+) |>
+  save_table(file.path(tables_dir, "tbl_overall_scenario_2_r1.docx"))
+
+overall_table(
+  df = cmp_overall,
+  scenario = scenario_3_r1_r11,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_calls",
+    "mean_minutes",
+    "median_minutes",
+    "p90_minutes",
+    "total_minutes",
+    "mean_distance_m",
+    "calls_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_8m58s",
+    "calls_within_10m21s", # 10:21, EMS High ERF
+    "pct_within_10m21s",
+    "fdz_p90_over_8min",
+    "fdz_p90_over_8m58s",
+    "fdz_p90_over_10m21s"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  time_format = "mmss"
+) |>
+  save_table(file.path(tables_dir, "tbl_overall_scenario_3_r1_r11.docx"))
+
+
+# Station Tables ----------------------------------------------------------
+
+station_table(
+  df = cmp_station,
+  scenario = scenario_1_r1_r26,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_incidents",
+    "p90_minutes"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  pct_total = TRUE,
+  time_format = "mmss"
+) |>
+  save_table(file.path(tables_dir, "tbl_station_scenario_1_r1_r26.docx"))
+
+
+station_table(
+  df = cmp_station,
+  scenario = scenario_2_r1,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_incidents",
+    "p90_minutes"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  pct_total = TRUE,
+  time_format = "mmss"
+) |>
+  save_table(file.path(tables_dir, "tbl_station_scenario_2_r1.docx"))
+
+
+station_table(
+  df = cmp_station,
+  scenario = scenario_3_r1_r11,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_incidents",
+    "p90_minutes"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  pct_total = TRUE,
+  time_format = "mmss"
+) |>
+  save_table(file.path(tables_dir, "tbl_station_scenario_3_r1_r11.docx"))
+
+
+# Call Tables -----------------------------------------------------------------
 
 # Call-level changes: values are already scenario minus baseline
 calls_table(
@@ -222,9 +328,7 @@ fdz_table(
     "total_minutes",
     "median_minutes",
     "p90_minutes",
-    "pct_within_8min",
     "pct_within_8m58s", # 8:58, EMS High First Unit
-    "pct_within_10min",
     "pct_within_10m21s" # 10:21, EMS High ERF
   ),
   baseline_name = baseline_name,

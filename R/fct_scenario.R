@@ -27,7 +27,7 @@
 #' @return One row per filter set, scenario, due level and responding station:
 #'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `source_id`,
 #'   `n_incidents`, `n_fdz` (zones the station responds to) and the travel
-#'   stats from [summarise_travel_stats()].
+#'   stats from [summarize_travel_stats()].
 #' @noRd
 stats_by_station <- function(
   scenarios,
@@ -39,7 +39,7 @@ stats_by_station <- function(
   responders <- scenario_responders(scenarios, matrix_df, runcard_df, filters, due)
   keys <- c("filter_name", "scenario_id", "scenario_name", "due", "source_id")
 
-  stats <- summarise_travel_stats(responders, by = keys)
+  stats <- summarize_travel_stats(responders, by = keys)
 
   n_fdz <- responders |>
     dplyr::distinct(dplyr::across(dplyr::all_of(c(keys, "fdz_id")))) |>
@@ -59,7 +59,7 @@ stats_by_station <- function(
 #'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `fdz_id`,
 #'   `source_id` (the responding station), `station_id` (the zone's territory
 #'   station, if the matrix has it) and the travel stats from
-#'   [summarise_travel_stats()].
+#'   [summarize_travel_stats()].
 #' @noRd
 stats_by_fdz <- function(
   scenarios,
@@ -79,7 +79,7 @@ stats_by_fdz <- function(
     intersect("station_id", names(responders))
   )
 
-  summarise_travel_stats(responders, by = keys) |>
+  summarize_travel_stats(responders, by = keys) |>
     order_like_inputs(responders, then = c("due", "fdz_id"))
 }
 

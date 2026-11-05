@@ -1,4 +1,4 @@
-# fread() reads CAD alarm times as POSIXct labelled UTC, but the clock digits
+# fread() reads CAD alarm times as POSIXct labeled UTC, but the clock digits
 # are New York local time. These build values in that same shape.
 as_cad_time <- function(x) as.POSIXct(x, tz = "UTC")
 

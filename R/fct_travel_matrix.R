@@ -19,9 +19,9 @@
 #' @return A tibble with `nrow(src_df) * nrow(dst_df)` rows:
 #'   * `source_id`, `dest_id`: the ids.
 #'   * `source_lat`, `source_lon`, `dest_lat`, `dest_lon`: input coordinates.
-#'   * `distance_m`: driving distance in metres.
+#'   * `distance_m`: driving distance in meters.
 #'   * `duration_min`: driving time in minutes.
-#'   * `source_snap_m`, `dest_snap_m`: metres from each input point to the
+#'   * `source_snap_m`, `dest_snap_m`: meters from each input point to the
 #'     road point OSRM snapped it to. Large values mean the point is far from
 #'     any road and its times are less reliable.
 #' @noRd

@@ -286,7 +286,7 @@ scenario_summary_table <- function(
   }
 
   # One entry per column: label, the baseline row's text, and per scenario the
-  # number (for sorting and best), its text and its colour
+  # number (for sorting and best), its text and its color
   columns <- list()
   for (m in metrics) {
     d <- vapply(scen, function(sc) value_of(sel$df, sc, m, "diff"), numeric(1))
@@ -696,7 +696,7 @@ metric_labels <- c(
   max_change = "Largest Change (Minutes)"
 )
 
-# Title Case (AP style: words of four or more letters capitalised, so "With"
+# Title Case (AP style: words of four or more letters capitalized, so "With"
 # and "Over" but "by") label for each metric; threshold metrics carry their
 # minutes. With `years` (counts from annualize_counts()), call counts end in
 # "per Year".
@@ -781,9 +781,9 @@ format_ci <- function(lower, upper, metrics, time_format = "decimal", digits = 2
   ifelse(lo == "" | hi == "", "", paste0("[", lo, ", ", hi, "]"))
 }
 
-# Diff colours: red when the change is worse, green when better
-worse_colour <- "#B00020"
-better_colour <- "#1B7F3B"
+# Diff colors: red when the change is worse, green when better
+worse_color <- "#B00020"
+better_color <- "#1B7F3B"
 
 # Which way is better for a metric; neither for workload counts like n_calls
 higher_is_better <- function(m) grepl("^(pct_within_|calls_within_|share_faster)", m)
@@ -797,10 +797,10 @@ diff_colors <- function(x, metrics) {
   out <- rep(NA_character_, length(x))
   up <- !is.na(x) & x > 0
   down <- !is.na(x) & x < 0
-  out[up & higher_is_worse(metrics)] <- worse_colour
-  out[down & higher_is_worse(metrics)] <- better_colour
-  out[up & higher_is_better(metrics)] <- better_colour
-  out[down & higher_is_better(metrics)] <- worse_colour
+  out[up & higher_is_worse(metrics)] <- worse_color
+  out[down & higher_is_worse(metrics)] <- better_color
+  out[up & higher_is_better(metrics)] <- better_color
+  out[down & higher_is_better(metrics)] <- worse_color
   out
 }
 
@@ -813,7 +813,7 @@ neutral_colors <- function(x) {
 
 # A styled flextable from display text. `labels` name every column; `groups`
 # (or NULL) gives a spanner label per column, NA for none; `colors` holds a
-# text colour per cell (NA for default); the first `n_keys` columns are row
+# text color per cell (NA for default); the first `n_keys` columns are row
 # labels. `years` (or NULL) adds a footer line saying the counts are yearly;
 # `notes` are added to the footer; `max_col_width` (inches) caps the value
 # columns so long headers wrap; `time_format = "mmss"` notes that times are
@@ -857,7 +857,7 @@ build_table <- function(
   ft <- flextable::italic(ft, i = 2, part = "header")
   ft <- flextable::bold(ft, i = 2, bold = FALSE, part = "header")
   ft <- flextable::align(ft, i = 1:2, align = "left", part = "header")
-  note <- "Modelled OSRM drive time; CAD run card order. Diff = scenario minus baseline."
+  note <- "Modeled OSRM drive time; CAD run card order. Diff = scenario minus baseline."
   if (!is.null(years)) {
     note <- paste0(note, " Call counts are yearly averages over ", sprintf("%.1f", years), " years.")
   }

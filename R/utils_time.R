@@ -13,7 +13,7 @@
 #' `"pre"` 01:54 EST). Every other time, including the repeated fall-back hour,
 #' comes out the same as `ymd_hms(tz = )` gave.
 #'
-#' @param x POSIXct vector labelled UTC whose clock digits are local time.
+#' @param x POSIXct vector labeled UTC whose clock digits are local time.
 #' @param tz Time zone the clock digits are really in.
 #'
 #' @return `x` as POSIXct in `tz`.

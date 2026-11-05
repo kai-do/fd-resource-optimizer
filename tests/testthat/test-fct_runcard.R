@@ -134,7 +134,7 @@ test_that("filter_by_runcard works on the travel matrix, one row per incident", 
 test_that("station stats come from the responder's own incidents", {
   # Station 1 is 1st due in 1A and 3C. Its incidents there take 2, 3, 10
   # (1A) and 20 (3C) minutes, so its median over its own incidents is 6.5.
-  # Summarising zones first gives medians 3 (1A) and 20 (3C), and no
+  # Summarizing zones first gives medians 3 (1A) and 20 (3C), and no
   # combination of those recovers 6.5: the filter has to run per incident.
   matrix_df <- data.frame(
     source_id = 1L,
@@ -146,8 +146,8 @@ test_that("station stats come from the responder's own incidents", {
   )
   responders <- filter_by_runcard(matrix_df, prep_runcard(make_runcard_raw_df()), stations = c(1, 22))
 
-  by_station <- summarise_travel_stats(responders, by = c("due", "source_id"))
-  by_fdz <- summarise_travel_stats(responders, by = c("due", "fdz_id"))
+  by_station <- summarize_travel_stats(responders, by = c("due", "source_id"))
+  by_fdz <- summarize_travel_stats(responders, by = c("due", "fdz_id"))
 
   expect_equal(by_station$n_incidents, 4L)
   expect_equal(by_station$median_minutes, 6.5)

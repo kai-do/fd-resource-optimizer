@@ -38,9 +38,9 @@ travel_matrix <- arrow::read_parquet(
   )
 )
 
-# Summarise -------------------------------------------------------------------
+# Summarize -------------------------------------------------------------------
 
-travel_stats <- summarise_travel_stats(
+travel_stats <- summarize_travel_stats(
   travel_matrix,
   by = c("source_id", "fdz_id", "station_id")
 )

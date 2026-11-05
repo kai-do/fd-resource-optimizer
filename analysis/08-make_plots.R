@@ -1,6 +1,6 @@
 # 08 - Travel-time box plots for the analysis
 #
-# Box plots of modelled travel time for the baseline and the top scenarios:
+# Box plots of modeled travel time for the baseline and the top scenarios:
 #   overall       one box per scenario
 #   station       per territory station
 #   fdz           per zone, for the zones you pick
@@ -38,6 +38,13 @@ orientation <- "horizontal"
 # keep the ones that don't change (their boxes equal the baseline's)
 split_changed <- FALSE
 include_unchanged <- TRUE
+
+# Benchmark minutes marked on the cumulative plot; names are the labels.
+# The same EMS High benchmarks as step 06's thresholds (m:ss as min + sec / 60)
+benchmarks <- c(
+  "8:58 First Unit" = 8 + 58 / 60,
+  "10:21 ERF" = 10 + 21 / 60
+)
 
 # Config ----------------------------------------------------------------------
 
@@ -124,5 +131,24 @@ travel_time_boxplot(
   include_unchanged = include_unchanged
 ) |>
   save_plot(file.path(plots_dir, "boxplot_fdz.png"), width = 8, height = 7)
+
+# Cumulative: % of calls reached within X minutes, one line per group
+travel_time_ecdf(
+  paired,
+  scenario = groups,
+  stations = NULL, # territory station ids to keep; NULL = all
+  fdz = NULL, # zone ids to keep; NULL = all
+  filter_name = filter_set,
+  due = due_level,
+  baseline_name = baseline_name,
+  include_unchanged = include_unchanged, # FALSE = changed calls only
+  benchmarks = benchmarks,
+  time_format = "decimal", # or "mmss"
+  max_minutes = NULL, # e.g. 20 to zoom; percentages still count every call
+  curve = "line", # or "step": the exact staircase of the 0.1-min rounded times
+  title = NULL,
+  subtitle = NULL
+) |>
+  save_plot(file.path(plots_dir, "ecdf_overall.png"), width = 8, height = 5)
 
 message("Plots written to ", plots_dir)

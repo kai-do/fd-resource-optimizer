@@ -32,13 +32,13 @@ test_that("stats_by_station has the scenario and filter columns first", {
 
 # stats_by_fdz ----------------------------------------------------------------
 
-test_that("stats_by_fdz equals filter_by_runcard + summarise_travel_stats", {
+test_that("stats_by_fdz equals filter_by_runcard + summarize_travel_stats", {
   matrix_df <- make_scenario_matrix_df()
   stations <- c(1, 3, 7, 22)
 
   out <- stats_by_fdz(make_scenarios()[1, ], matrix_df, runcard())
   direct <- filter_by_runcard(matrix_df, runcard(), stations) |>
-    summarise_travel_stats(by = c("due", "fdz_id", "source_id", "station_id"))
+    summarize_travel_stats(by = c("due", "fdz_id", "source_id", "station_id"))
 
   expect_equal(out$fdz_id, direct$fdz_id)
   expect_equal(out$source_id, direct$source_id)

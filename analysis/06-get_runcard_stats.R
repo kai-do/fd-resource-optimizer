@@ -3,7 +3,7 @@
 # Each scenario is a set of open stations; each filter set
 # (incident_filter()) says which calls count. Every scenario runs under every
 # filter set: each incident goes to its zone's run card responder at the chosen
-# due levels, and stats are summarised by responding station and by FDZ. Results
+# due levels, and stats are summarized by responding station and by FDZ. Results
 # for all scenarios and filter sets sit side by side in one file each.
 #
 # Inputs  (data_outputs_dir): incident_travel_matrix_fdz.parquet  (step 04)
@@ -193,13 +193,13 @@ comparison <- scenarios |>
 keys <- c("filter_name", "scenario_id", "due")
 
 fdz_totals <- stats_fdz |>
-  dplyr::summarise(
+  dplyr::summarize(
     n_incidents = sum(n_incidents),
     n_fdz = dplyr::n(),
     .by = dplyr::all_of(keys)
   )
 station_totals <- stats_station |>
-  dplyr::summarise(
+  dplyr::summarize(
     n_incidents = sum(n_incidents),
     n_fdz = sum(n_fdz),
     .by = dplyr::all_of(keys)

@@ -1,10 +1,10 @@
 # Travel-time statistics from the station x incident travel matrix.
 #
 # The matrix has one row per station per incident. closest_station() and
-# territory_travel() reduce it to one row per incident; summarise_travel_stats()
+# territory_travel() reduce it to one row per incident; summarize_travel_stats()
 # and coverage_share() then answer questions on either form. For example:
 #
-#   matrix_df |> closest_station() |> summarise_travel_stats(by = "fdz_id")
+#   matrix_df |> closest_station() |> summarize_travel_stats(by = "fdz_id")
 #   matrix_df |> territory_travel() |> coverage_share(minutes = c(4, 8))
 
 #' The fastest station for each incident
@@ -54,7 +54,7 @@ territory_travel <- function(matrix_df, territory = "station_id") {
   out
 }
 
-#' Summarise travel times by group
+#' Summarize travel times by group
 #'
 #' @param df Travel matrix, or a one-row-per-incident table from
 #'   [closest_station()] or [territory_travel()]. Needs `dest_id`,
@@ -66,10 +66,10 @@ territory_travel <- function(matrix_df, territory = "station_id") {
 #'   percentile of `duration_min`, the mean `distance_m`, and the first and
 #'   last alarm time.
 #' @noRd
-summarise_travel_stats <- function(df, by = c("source_id", "fdz_id")) {
+summarize_travel_stats <- function(df, by = c("source_id", "fdz_id")) {
   df |>
     dplyr::group_by(dplyr::across(dplyr::all_of(by))) |>
-    dplyr::summarise(
+    dplyr::summarize(
       n_incidents = dplyr::n_distinct(dest_id),
       mean_minutes = mean(duration_min, na.rm = TRUE),
       median_minutes = stats::median(duration_min, na.rm = TRUE),
@@ -110,7 +110,7 @@ coverage_share <- function(df, minutes, by = NULL) {
 
   df |>
     dplyr::group_by(dplyr::across(dplyr::all_of(by))) |>
-    dplyr::summarise(
+    dplyr::summarize(
       n_incidents = dplyr::n(),
       dplyr::across(dplyr::all_of(share_cols), mean),
       .groups = "drop"

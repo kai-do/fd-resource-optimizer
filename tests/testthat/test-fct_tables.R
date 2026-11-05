@@ -144,12 +144,12 @@ test_that("fdz_table shows each zone's responders and the metric diff", {
   expect_true(all(c("FDZ", "Baseline Station", "Scenario Station") %in% header_text(ft)))
 })
 
-test_that("slower zones are coloured red, unchanged ones are not", {
+test_that("slower zones are colored red, unchanged ones are not", {
   ft <- fdz_table(compare_with(compare_by_fdz))
-  colours <- ft$body$styles$text$color$data[, "median_minutes_d"]
+  colors <- ft$body$styles$text$color$data[, "median_minutes_d"]
 
-  expect_equal(unname(colours[body(ft)$fdz_id == "1A"]), "#B00020")
-  expect_false(identical(unname(colours[body(ft)$fdz_id == "2B"]), "#B00020"))
+  expect_equal(unname(colors[body(ft)$fdz_id == "1A"]), "#B00020")
+  expect_false(identical(unname(colors[body(ft)$fdz_id == "2B"]), "#B00020"))
 })
 
 test_that("zones sort by number, then letter", {
@@ -224,7 +224,7 @@ test_that("the footer only mentions the extra columns when they are shown", {
   expect_match(footer_text(ft), "First row: baseline values")
 })
 
-test_that("a subset of scenarios can be shown, and yearly counts are labelled", {
+test_that("a subset of scenarios can be shown, and yearly counts are labeled", {
   ft <- scenario_summary_table(annualize_counts(compare_with(compare_overall), years = 2), scenario = "No 3")
 
   expect_equal(body(ft)$scenario, c("Baseline", "No 3"))

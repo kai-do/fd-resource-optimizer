@@ -131,7 +131,7 @@ test_that("mmss labels the minutes axis as m:ss", {
   expect_equal(p$scales$get_scales("x")$labels(c(7.5, 10)), c("7:30", "10:00"))
 })
 
-test_that("more than 8 scenarios share one colour overall but error by station", {
+test_that("more than 8 scenarios share one color overall but error by station", {
   groups <- c("Base", paste("S", 1:9))
   overall <- group_colors(groups, "Base", "overall")
 
@@ -197,6 +197,78 @@ test_that("the change options need a scenario besides the baseline", {
     boxplot_of(by = "fdz", fdz = "2B", scenario = c("All", "No 1"), include_unchanged = FALSE),
     "No calls change responder"
   )
+})
+
+# Cumulative curves -----------------------------------------------------------
+
+ecdf_of <- function(...) travel_time_ecdf(paired(), baseline_name = "All", ...)
+
+# Share of a group's calls reached by `minutes`, read off the drawn curve
+reached_by <- function(p, color, minutes) {
+  d <- ggplot2::layer_data(p, 1)
+  d <- d[d$colour == color & d$x <= minutes, ]
+  if (nrow(d) == 0) 0 else max(d$y)
+}
+
+test_that("the ECDF plot has one curve per group, baseline gray", {
+  p <- ecdf_of(scenario = c("All", "No 1"))
+  d <- ggplot2::layer_data(p, 1)
+
+  expect_s3_class(p, "ggplot")
+  expect_equal(length(unique(d$colour)), 2)
+  expect_true(plot_baseline_color %in% d$colour)
+  expect_equal(p$theme$legend.position, "bottom")
+  expect_equal(p$labels$y, "Calls Reached")
+})
+
+test_that("each curve is the share of that group's calls reached in time", {
+  for (curve in c("line", "step")) {
+    p <- ecdf_of(scenario = c("All", "No 1"), curve = curve)
+
+    # All: I1, I2, I4 within 3.5 min; No 1: only I4
+    expect_equal(reached_by(p, plot_baseline_color, 3.5), 0.75)
+    expect_equal(reached_by(p, plot_colors[1], 3.5), 0.25)
+    expect_equal(reached_by(p, plot_colors[1], 100), 1)
+  }
+})
+
+test_that("the line curve rises across each 0.1-minute rounding window", {
+  pts <- ecdf_points(plot_times_long(paired(), "All", "All"))
+
+  # All: 1.1, 1.2, 3.4, 7.3 -> start half a step early, each point half a step late
+  expect_equal(pts$minutes, c(1.05, 1.15, 1.25, 3.45, 7.35))
+  expect_equal(pts$reached, c(0, 0.25, 0.5, 0.75, 1))
+  expect_s3_class(ecdf_of()$layers[[1]]$geom, "GeomLine")
+  expect_s3_class(ecdf_of(curve = "step")$layers[[1]]$geom, "GeomStep")
+})
+
+test_that("stations, fdz and include_unchanged pick the calls", {
+  expect_setequal(ecdf_of(stations = 1)$data$dest_id, c("I1", "I2"))
+  expect_setequal(ecdf_of(fdz = "3C")$data$dest_id, "I4")
+
+  changed <- ecdf_of(scenario = c("All", "No 1"), include_unchanged = FALSE)
+  expect_setequal(changed$data$dest_id, c("I1", "I2"))
+  expect_match(changed$labels$subtitle, "Changed only$")
+  expect_error(ecdf_of(scenario = "All", include_unchanged = FALSE), "at least one scenario")
+})
+
+test_that("benchmarks draw a labeled dashed line each", {
+  p <- ecdf_of(benchmarks = c("NFPA" = 4, 8))
+  lines <- ggplot2::layer_data(p, 2)
+  text <- ggplot2::layer_data(p, 3)
+
+  expect_equal(lines$xintercept, c(4, 8))
+  expect_equal(text$label, c("NFPA", "8 min"))
+  expect_equal(ggplot2::layer_data(ecdf_of(benchmarks = 7.5, time_format = "mmss"), 3)$label, "7:30")
+  expect_length(ecdf_of()$layers, 1)
+  expect_error(ecdf_of(benchmarks = "8"), "numeric minutes")
+})
+
+test_that("mmss labels the ECDF minutes axis as m:ss", {
+  p <- ecdf_of(time_format = "mmss")
+
+  expect_equal(p$labels$x, "Travel Time (m:ss)")
+  expect_equal(p$scales$get_scales("x")$labels(c(7.5, 10)), c("7:30", "10:00"))
 })
 
 test_that("save_plot writes a PNG", {

@@ -18,7 +18,7 @@
 #' Time, distance and threshold metrics are over the paired calls (served in
 #' both); calls served in only one are counted as unserved instead.
 #' `total_minutes` sums every paired call's minutes, a demand-weighted total
-#' (the quantity the p-median optimizer minimises); with the same calls on both
+#' (the quantity the p-median optimizer minimizes); with the same calls on both
 #' sides its diff is `n_calls` times the mean diff.
 #'
 #' @inheritParams stats_by_station
@@ -31,7 +31,7 @@
 #'   the time, distance and `pct_within` diffs. Whole zones are resampled,
 #'   because calls in a zone share a responder and are not independent. The
 #'   interval reflects which calls happened to occur, not error in the
-#'   modelled travel times. Use `set.seed()` first for repeatable intervals.
+#'   modeled travel times. Use `set.seed()` first for repeatable intervals.
 #' @param n_boot,level Number of bootstrap resamples and interval level.
 #'
 #' @return One row per filter set, scenario, due level and metric:
@@ -187,8 +187,8 @@ compare_by_fdz_paired <- function(paired, thresholds) {
     df <- paired[!is.na(minutes), ]
     df$minutes <- minutes[!is.na(minutes)]
     df$responder <- df[[paste0(side, "_source_id")]]
-    summarised <- df |>
-      dplyr::summarise(
+    summarized <- df |>
+      dplyr::summarize(
         source_id = dplyr::first(responder),
         n_calls = dplyr::n(),
         mean_minutes = mean(minutes),
@@ -199,11 +199,11 @@ compare_by_fdz_paired <- function(paired, thresholds) {
       )
     for (t in thresholds) {
       within <- df |>
-        dplyr::summarise(value = mean(minutes <= t), .by = dplyr::all_of(keys))
+        dplyr::summarize(value = mean(minutes <= t), .by = dplyr::all_of(keys))
       names(within)[names(within) == "value"] <- paste0("pct_within_", threshold_key(t))
-      summarised <- dplyr::left_join(summarised, within, by = keys)
+      summarized <- dplyr::left_join(summarized, within, by = keys)
     }
-    summarised
+    summarized
   }
 
   zones <- unique(paired[keys])
@@ -272,7 +272,7 @@ compare_by_station_paired <- function(paired) {
     df$source_id <- df[[paste0(side, "_source_id")]]
     df$minutes <- minutes[!is.na(minutes)]
     df |>
-      dplyr::summarise(
+      dplyr::summarize(
         n_incidents = dplyr::n(),
         n_fdz = dplyr::n_distinct(fdz_id),
         total_minutes = sum(minutes),
@@ -304,7 +304,7 @@ compare_by_station_paired <- function(paired) {
 
 # One row per filter set, scenario (other than the baseline), call and due
 # level: the call's zone (and territory station_id, if the matrix has it) and
-# its responder, minutes and metres in the baseline and in the scenario. NA on
+# its responder, minutes and meters in the baseline and in the scenario. NA on
 # a side where the zone has no responder.
 paired_calls <- function(scenarios, matrix_df, runcard_df, filters, due) {
   base_row <- require_baseline(scenarios)
