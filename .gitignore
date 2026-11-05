@@ -44,3 +44,6 @@ _baseline/
 # Rendered tutorial output (built from incident-level data) and Quarto cache
 legacy/tutorials/deployment_analysis_phase_1.html
 .quarto/
+
+# Street-map tiles cached by the static maps (rosm / ggspatial)
+rosm.cache/
