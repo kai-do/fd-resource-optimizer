@@ -24,6 +24,12 @@
 #                             scenario_comparison.xlsx
 #                             The same comparisons in one workbook, with the
 #                             settings, scenarios and filter sets used.
+#                             paired_calls.parquet
+#                             One row per filter set, scenario (other than
+#                             the baseline), call and due level: the call's
+#                             zone, territory station, and its responder and
+#                             minutes in the baseline and the scenario. For
+#                             the travel-time plots (step 08).
 #                             scenarios.parquet
 #                             The scenarios: id, name, stations, baseline.
 #                             filter_years.parquet
@@ -143,7 +149,14 @@ due_levels <- 1
 # Comparison settings: travel-time thresholds (minutes), and bootstrap
 # confidence intervals on the overall diffs (slower; the seed in
 # export_comparison() below makes them repeatable)
-thresholds <- c(8, 10, 12.37)
+# m:ss benchmarks go in as minutes + seconds / 60; their metrics are named to
+# the second (pct_within_8m58s, shown as "Within 8:58 Min")
+thresholds <- c(
+  8,
+  8 + 58 / 60, # 8:58, EMS High First Unit
+  10,
+  10 + 21 / 60 # 10:21, EMS High ERF
+)
 with_ci <- TRUE
 
 # Stats -----------------------------------------------------------------------
@@ -220,6 +233,13 @@ for (sheet in names(compare_files)) {
     compression = "zstd"
   )
 }
+
+# The call-level times behind the comparisons, for the box plots in step 08
+arrow::write_parquet(
+  attr(comparison, "paired"),
+  file.path(cfg$data_outputs_dir, "paired_calls.parquet"),
+  compression = "zstd"
+)
 
 # The scenarios (step 07 takes the baseline's name from them) and the years
 # each filter set covers, for yearly averages in step 07: a filter set's

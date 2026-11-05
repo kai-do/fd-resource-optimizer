@@ -140,7 +140,7 @@ test_that("fdz_table shows each zone's responders and the metric diff", {
   zone_1a <- b[b$fdz_id == "1A", ]
 
   expect_equal(c(zone_1a$baseline_station, zone_1a$scenario_station), c("1", "7"))
-  expect_equal(zone_1a$median_minutes_d, "+6.0")
+  expect_equal(zone_1a$median_minutes_d, "+6.00")
   expect_true(all(c("FDZ", "Baseline Station", "Scenario Station") %in% header_text(ft)))
 })
 
@@ -248,8 +248,45 @@ test_that("calls_table lists the call-level changes", {
   b <- body(ft)
 
   expect_equal(b$s1[b$metric == "Share Slower"], "50.0%")
-  expect_equal(b$s1[b$metric == "Mean Change (Minutes)"], "+3.0")
+  expect_equal(b$s1[b$metric == "Mean Change (Minutes)"], "+3.00")
   expect_true("Value" %in% header_text(ft))
+})
+
+# Time formats ----------------------------------------------------------------
+
+test_that("times show 2 decimals by default, or as many as digits asks", {
+  expect_equal(format_values(7.456, "median_minutes"), "7.46")
+  expect_equal(format_values(7.456, "median_minutes", digits = 1), "7.5")
+  expect_equal(format_values(-0.5, "mean_change", diff = TRUE), "-0.50")
+})
+
+test_that("mmss shows times as m:ss, with a sign on diffs", {
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format = "mmss")
+
+  expect_equal(fmt(7.5, "median_minutes"), "7:30")
+  expect_equal(fmt(12.37, "p90_minutes"), "12:22")
+  expect_equal(fmt(c(1.0833, -0.5, 0), "mean_change", diff = TRUE), c("+1:05", "-0:30", "0:00"))
+  expect_equal(fmt(59.999, "median_minutes"), "60:00") # rounds up into the next minute
+  # counts, shares and distance are unchanged
+  expect_equal(fmt(1234, "total_minutes"), "1,234")
+  expect_equal(fmt(0.25, "pct_within_8min"), "25.0%")
+})
+
+test_that("every table takes time_format and notes it in the footer", {
+  footer <- function(ft) paste(ft$footer$dataset[[1]], collapse = " ")
+
+  ft <- fdz_table(compare_with(compare_by_fdz), time_format = "mmss")
+  expect_equal(body(ft)$median_minutes_d[body(ft)$fdz_id == "1A"], "+6:00")
+  expect_match(footer(ft), "minutes:seconds")
+
+  ft <- calls_table(compare_with(compare_calls), time_format = "mmss")
+  expect_equal(body(ft)$s1[body(ft)$metric == "Mean Change (Minutes)"], "+3:00")
+
+  expect_s3_class(overall_table(compare_with(compare_overall), time_format = "mmss"), "flextable")
+  expect_s3_class(station_table(compare_with(compare_by_station), time_format = "mmss"), "flextable")
+  expect_s3_class(scenario_summary_table(compare_with(compare_overall), time_format = "mmss"), "flextable")
+  expect_no_match(footer(overall_table(compare_with(compare_overall))), "minutes:seconds")
+  expect_error(overall_table(compare_with(compare_overall), time_format = "hms"), "should be one of")
 })
 
 # Selection and labels ---------------------------------------------------------
@@ -280,10 +317,10 @@ test_that("a scenario can be picked by id", {
 
 test_that("metric labels are Title Case", {
   expect_equal(
-    metric_label(c("p90_minutes", "pct_within_12.37min", "fdz_p90_over_8min", "calls_slower_by_2min", "mean_distance_m")),
+    metric_label(c("p90_minutes", "pct_within_10m21s", "fdz_p90_over_8min", "calls_slower_by_2min", "mean_distance_m")),
     c(
       "90th Percentile Minutes",
-      "Within 12.37 Min",
+      "Within 10:21 Min",
       "FDZs With 90th Percentile Over 8 Min",
       "Calls Slower by More Than 2 Min",
       "Mean Distance (Miles)"

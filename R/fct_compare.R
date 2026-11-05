@@ -24,8 +24,9 @@
 #' @inheritParams stats_by_station
 #' @param scenarios Scenarios as for [stats_by_station()], plus a logical
 #'   `baseline` column with exactly one `TRUE`.
-#' @param thresholds Minutes for the `pct_within_<t>min`,
-#'   `calls_within_<t>min` and `fdz_p90_over_<t>min` metrics.
+#' @param thresholds Minutes for the `pct_within_<t>`, `calls_within_<t>`
+#'   and `fdz_p90_over_<t>` metrics. `<t>` is `8min` for whole minutes, or
+#'   minutes and seconds such as `8m58s` for 8:58 (give it as `8 + 58 / 60`).
 #' @param ci Add bootstrap confidence intervals (`ci_lower`, `ci_upper`) for
 #'   the time, distance and `pct_within` diffs. Whole zones are resampled,
 #'   because calls in a zone share a responder and are not independent. The
@@ -199,7 +200,7 @@ compare_by_fdz_paired <- function(paired, thresholds) {
     for (t in thresholds) {
       within <- df |>
         dplyr::summarise(value = mean(minutes <= t), .by = dplyr::all_of(keys))
-      names(within)[names(within) == "value"] <- paste0("pct_within_", t, "min")
+      names(within)[names(within) == "value"] <- paste0("pct_within_", threshold_key(t))
       summarised <- dplyr::left_join(summarised, within, by = keys)
     }
     summarised
@@ -218,7 +219,7 @@ compare_by_fdz_paired <- function(paired, thresholds) {
     "total_minutes",
     "median_minutes",
     "p90_minutes",
-    paste0("pct_within_", thresholds, "min")
+    paste0("pct_within_", threshold_key(thresholds))
   )
   b_src <- wide$source_id.baseline
   s_src <- wide$source_id.scenario
@@ -226,12 +227,7 @@ compare_by_fdz_paired <- function(paired, thresholds) {
     wide[keys],
     baseline_source_id = b_src,
     scenario_source_id = s_src,
-    # served on one side only counts as a change; unserved on both does not
-    responder_changed = ifelse(
-      is.na(b_src) & is.na(s_src),
-      FALSE,
-      is.na(b_src) | is.na(s_src) | b_src != s_src
-    )
+    responder_changed = responder_differs(b_src, s_src)
   )
 
   out <- long_metrics(zone_info, wide, metrics)
@@ -307,8 +303,9 @@ compare_by_station_paired <- function(paired) {
 # Internals -------------------------------------------------------------------
 
 # One row per filter set, scenario (other than the baseline), call and due
-# level: the call's zone and its responder, minutes and metres in the baseline
-# and in the scenario. NA on a side where the zone has no responder.
+# level: the call's zone (and territory station_id, if the matrix has it) and
+# its responder, minutes and metres in the baseline and in the scenario. NA on
+# a side where the zone has no responder.
 paired_calls <- function(scenarios, matrix_df, runcard_df, filters, due) {
   base_row <- require_baseline(scenarios)
   if (is.null(due) || length(due) == 0) {
@@ -360,6 +357,30 @@ require_baseline <- function(scenarios) {
   which(b)
 }
 
+# Threshold minutes as they appear in metric names: whole minutes as "8min",
+# others to the nearest second as "8m58s" (8:58), so 8 + 58 / 60 is not
+# named "8.96666666666667min"
+threshold_key <- function(t) {
+  secs <- round(t * 60)
+  ifelse(
+    secs %% 60 == 0,
+    paste0(secs %/% 60, "min"),
+    sprintf("%dm%02ds", as.integer(secs %/% 60), as.integer(secs %% 60))
+  )
+}
+
+# Threshold minutes for display: "8" or "8:58"
+threshold_text <- function(t) {
+  key <- threshold_key(t)
+  ifelse(grepl("min$", key), sub("min$", "", key), sub("^(\\d+)m(\\d{2})s$", "\\1:\\2", key))
+}
+
+# TRUE where the baseline and scenario responders differ: a different station,
+# or served on one side only (unserved on both is not a change)
+responder_differs <- function(base, scen) {
+  ifelse(is.na(base) & is.na(scen), FALSE, is.na(base) | is.na(scen) | base != scen)
+}
+
 split_groups <- function(paired) {
   key <- interaction(paired$filter_name, paired$scenario_id, paired$due, drop = TRUE, lex.order = TRUE)
   split(paired, key)
@@ -387,9 +408,9 @@ overall_metrics <- function(both, side, thresholds) {
     numeric()
   }
   for (t in thresholds) {
-    values[paste0("pct_within_", t, "min")] <- if (length(minutes) > 0) mean(minutes <= t) else NA_real_
-    values[paste0("calls_within_", t, "min")] <- sum(minutes <= t)
-    values[paste0("fdz_p90_over_", t, "min")] <- sum(zone_p90 > t)
+    values[paste0("pct_within_", threshold_key(t))] <- if (length(minutes) > 0) mean(minutes <= t) else NA_real_
+    values[paste0("calls_within_", threshold_key(t))] <- sum(minutes <= t)
+    values[paste0("fdz_p90_over_", threshold_key(t))] <- sum(zone_p90 > t)
   }
   values
 }
@@ -447,7 +468,7 @@ bootstrap_diffs <- function(both, thresholds, n_boot, level) {
     "median_minutes",
     "p90_minutes",
     "mean_distance_m",
-    paste0("pct_within_", thresholds, "min")
+    paste0("pct_within_", threshold_key(thresholds))
   )
   if (nrow(both) == 0) {
     return(data.frame(metric = metrics, ci_lower = NA_real_, ci_upper = NA_real_))

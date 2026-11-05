@@ -117,13 +117,18 @@ scenario_responders <- function(scenarios, matrix_df, runcard_df, filters, due) 
     filtered <- filter_incidents(matrix_df, f)
 
     # Every call in the filter set that has a zone, served or not, for the
-    # unserved counts in the compare_*() functions
+    # unserved counts in the compare_*() functions. The territory station
+    # comes along when the matrix has it, for plots by station territory.
     zoned <- filtered[!is.na(filtered$fdz_id), ]
-    calls[[f$name]] <- data.frame(
+    zone_calls <- data.frame(
       filter_name = rep(f$name, nrow(zoned)),
       dest_id = zoned$dest_id,
       fdz_id = zoned$fdz_id
-    )[!duplicated(zoned$dest_id), ]
+    )
+    if ("station_id" %in% names(zoned)) {
+      zone_calls$station_id <- zoned$station_id
+    }
+    calls[[f$name]] <- zone_calls[!duplicated(zoned$dest_id), ]
 
     for (i in seq_len(nrow(scenarios))) {
       label <- paste0(f$name, " / ", scenarios$scenario_name[i], ": ")

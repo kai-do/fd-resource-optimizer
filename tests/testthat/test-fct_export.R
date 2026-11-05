@@ -25,6 +25,14 @@ test_that("the workbook has the seven sheets in order", {
   expect_named(out$sheets, expected)
 })
 
+test_that("the call-level paired table comes back as an attribute, not a sheet", {
+  out <- export_to_temp()
+  paired <- attr(out$sheets, "paired")
+
+  expect_true(all(c("baseline_minutes", "scenario_minutes", "station_id") %in% names(paired)))
+  expect_false("paired" %in% openxlsx::getSheetNames(out$file))
+})
+
 test_that("the comparison sheets hold the compare_*() results", {
   out <- export_to_temp(thresholds = 4, slower_by = 2)
   args <- list(make_scenarios(), make_scenario_matrix_df(), runcard())
@@ -70,6 +78,9 @@ test_that("the Settings sheet records the run's settings", {
 
   expect_equal(value("due levels"), "1, 2")
   expect_equal(value("thresholds (minutes)"), "4, 8")
+
+  mmss <- read_sheet(export_to_temp(thresholds = c(8, 8 + 58 / 60))$file, "Settings")
+  expect_equal(mmss$value[mmss$setting == "thresholds (minutes)"], "8, 8:58")
   expect_equal(value("confidence intervals"), "Yes")
   expect_equal(value("bootstrap resamples"), "50")
   expect_equal(value("seed"), "7")

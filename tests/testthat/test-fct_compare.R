@@ -52,6 +52,22 @@ test_that("compare_overall threshold metrics", {
   expect_false("pct_within_8min" %in% out$metric)
 })
 
+test_that("threshold_key names whole minutes as before and others to the second", {
+  expect_equal(threshold_key(c(8, 10, 8 + 58 / 60, 10 + 21 / 60)), c("8min", "10min", "8m58s", "10m21s"))
+  expect_equal(threshold_key(10.35), "10m21s") # 10:21 as decimal minutes
+  expect_equal(threshold_text(c(8, 8 + 58 / 60, 10 + 21 / 60)), c("8", "8:58", "10:21"))
+})
+
+test_that("m:ss thresholds get m:ss metric names, CIs included", {
+  # 3:24 = 3.4 minutes: 1.1, 1.2, 3.4 within it in the baseline; only 3.4 in the scenario
+  out <- compare_overall(make_scenarios(), make_scenario_matrix_df(), runcard(), thresholds = 3 + 24 / 60, ci = TRUE, n_boot = 5)
+
+  expect_equal(metric_row(out, "pct_within_3m24s")$baseline, 0.75)
+  expect_equal(metric_row(out, "pct_within_3m24s")$scenario, 0.25)
+  expect_true(all(c("calls_within_3m24s", "fdz_p90_over_3m24s") %in% out$metric))
+  expect_false(is.na(metric_row(out, "pct_within_3m24s")$ci_lower))
+})
+
 test_that("compare_overall counts unserved calls instead of pairing them", {
   # with only station 22 open, 2B (I3) has no responder
   scenarios <- tibble::tribble(

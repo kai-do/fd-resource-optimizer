@@ -72,6 +72,171 @@ file_slug <- function(x) {
   gsub("^_+|_+$", "", gsub("[^A-Za-z0-9]+", "_", x))
 }
 
+# Summary for the first filter set, saved at the top of tables/
+dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+first_filter <- unique(cmp_overall$filter_name)[1]
+
+scenario_summary_table(
+  overall_df = cmp_overall,
+  calls_df = cmp_calls,
+  station_df = cmp_station,
+  scenario = NULL, # NULL = every scenario
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "total_minutes",
+    "p90_minutes",
+    "pct_within_8min",
+    "pct_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_10m21s" # 10:21, EMS High ERF
+  ),
+  calls_metrics = c(
+    "share_faster",
+    "share_slower"
+  ),
+  sort_by = rank_by, # one of the columns above, or "busiest_station"
+  baseline_name = baseline_name,
+  title = NULL, # NULL = automatic
+  subtitle = NULL,
+  time_format = 'mmss'
+) |>
+  save_table(file.path(tables_dir, "tbl_overall.docx"))
+
+# Example tables, every argument and metric spelled out ------------------------
+#
+# One of each table type for the best scenario in the first filter set. Drop
+# the metrics you don't need. Threshold names come from step 06's thresholds:
+# 8min and 10min, 8m58s (8:58, EMS High First Unit) and 10m21s (10:21, EMS
+# High ERF); the slower-by ones (2, 5 min) from its slower_by.
+
+scenarios <- rank_scenarios(
+  cmp_overall,
+  by = rank_by,
+  filter_name = first_filter,
+  due = due_level
+)
+
+scenario_1_r1_r26 <- scenarios[1]
+scenario_1_r1 <- scenarios[2]
+scenario_1_r1_r11 <- scenarios[3]
+
+# Overall: one row per metric; Baseline / Scenario / Diff / % Diff (and 95% CI)
+overall_table(
+  df = cmp_overall,
+  scenario = scenario_1_r1_r26,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_calls",
+    "mean_minutes",
+    "median_minutes",
+    "p90_minutes",
+    "total_minutes",
+    "mean_distance_m",
+    "calls_within_8min",
+    "pct_within_8min",
+    #"pct_within_10min",
+    #"calls_within_10min",
+    "calls_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_8m58s",
+    "calls_within_10m21s", # 10:21, EMS High ERF
+    "pct_within_10m21s",
+    "fdz_p90_over_8min",
+    #"fdz_p90_over_10min",
+    "fdz_p90_over_8m58s",
+    "fdz_p90_over_10m21s"
+    #"unserved_zones",
+    #"unserved_calls"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL
+) |>
+  save_table(file.path(tables_dir, "tbl_example_overall.docx"))
+
+# Call-level changes: values are already scenario minus baseline
+calls_table(
+  df = cmp_calls,
+  scenario = example_scenario, # several for one column each
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_calls",
+    "share_responder_changed",
+    "share_faster",
+    "share_slower",
+    "share_unchanged",
+    "mean_change",
+    "median_change",
+    "p90_change",
+    "max_change",
+    "calls_slower_by_2min",
+    "share_slower_by_2min",
+    "calls_slower_by_5min",
+    "share_slower_by_5min"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL
+) |>
+  save_table(file.path(tables_dir, "tbl_example_calls.docx"))
+
+# Station workload: one row per station. Several metrics only work with one
+# scenario; % of Total is added for the count metrics only
+station_table(
+  df = cmp_station,
+  scenario = example_scenario,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_incidents",
+    "n_fdz",
+    "total_minutes",
+    "median_minutes",
+    "p90_minutes"
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  pct_total = TRUE
+) |>
+  save_table(file.path(tables_dir, "tbl_example_station.docx"))
+
+# FDZ: one row per zone, here only the zones whose responder changes (all
+# zones would be hundreds of rows). Several metrics only with one scenario
+example_fdz <- cmp_fdz[
+  cmp_fdz$filter_name == first_filter &
+    cmp_fdz$due == due_level &
+    cmp_fdz$scenario_name == example_scenario &
+    cmp_fdz$responder_changed,
+]
+
+fdz_table(
+  df = example_fdz,
+  scenario = example_scenario,
+  filter_name = first_filter,
+  due = due_level,
+  metrics = c(
+    "n_calls",
+    "mean_minutes",
+    "total_minutes",
+    "median_minutes",
+    "p90_minutes",
+    "pct_within_8min",
+    "pct_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_10min",
+    "pct_within_10m21s" # 10:21, EMS High ERF
+  ),
+  baseline_name = baseline_name,
+  title = NULL,
+  subtitle = NULL,
+  pct_total = FALSE
+) |>
+  save_table(file.path(tables_dir, "tbl_example_fdz.docx"))
+
+
+# Auto Generate all Tables ----------------------------------------------------
+
 for (filter in unique(cmp_overall$filter_name)) {
   filter_dir <- file.path(tables_dir, file_slug(filter))
   dir.create(filter_dir, recursive = TRUE, showWarnings = FALSE)

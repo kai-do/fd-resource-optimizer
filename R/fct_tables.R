@@ -18,6 +18,10 @@
 #' @param metrics Metrics to show, in order. `NULL` for the default set.
 #' @param baseline_name Name of the baseline scenario, for the subtitle.
 #' @param title,subtitle Override the automatic title and subtitle.
+#' @param time_format How times (mean, median, 90th percentile minutes and
+#'   their changes) are shown: `"decimal"` (7.50) or `"mmss"` (7:30). Total
+#'   minutes stay a whole-number count either way.
+#' @param digits Decimal places for times when `time_format = "decimal"`.
 #'
 #' @return A flextable: one row per metric with Baseline, Scenario, Diff and %
 #'   Diff columns (and 95% CI when `df` has intervals).
@@ -30,8 +34,12 @@ overall_table <- function(
   metrics = NULL,
   baseline_name = "Baseline",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  time_format = c("decimal", "mmss"),
+  digits = 2
 ) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
   sel <- select_compare(df, scenario, filter_name, due)
   if (is.null(metrics)) {
     metrics <- intersect(
@@ -49,7 +57,7 @@ overall_table <- function(
   body <- data.frame(metric = metric_label(metrics, sel$years))
   colors <- data.frame(metric = rep(NA_character_, length(metrics)))
   first <- sel$df[sel$df$scenario_name == sel$scenarios[1], ]
-  body$baseline <- format_values(first$baseline[match(metrics, first$metric)], metrics)
+  body$baseline <- fmt(first$baseline[match(metrics, first$metric)], metrics)
   colors$baseline <- NA_character_
   groups <- c(NA, NA)
   labels <- c("Metric", "Baseline")
@@ -58,15 +66,15 @@ overall_table <- function(
     rows <- sel$df[sel$df$scenario_name == sel$scenarios[k], ]
     rows <- rows[match(metrics, rows$metric), ]
     id <- paste0("s", k)
-    body[[paste0(id, "_scenario")]] <- format_values(rows$scenario, metrics)
-    body[[paste0(id, "_diff")]] <- format_values(rows$diff, metrics, diff = TRUE)
+    body[[paste0(id, "_scenario")]] <- fmt(rows$scenario, metrics)
+    body[[paste0(id, "_diff")]] <- fmt(rows$diff, metrics, diff = TRUE)
     body[[paste0(id, "_pct")]] <- format_pct_diff(rows$pct_diff, metrics)
     colors[[paste0(id, "_scenario")]] <- NA_character_
     colors[[paste0(id, "_diff")]] <- diff_colors(rows$diff, metrics)
     colors[[paste0(id, "_pct")]] <- NA_character_
     new_labels <- c("Scenario", "Diff", "% Diff")
     if (has_ci) {
-      body[[paste0(id, "_ci")]] <- format_ci(rows$ci_lower, rows$ci_upper, metrics)
+      body[[paste0(id, "_ci")]] <- format_ci(rows$ci_lower, rows$ci_upper, metrics, time_format, digits)
       colors[[paste0(id, "_ci")]] <- NA_character_
       new_labels <- c(new_labels, "95% CI")
     }
@@ -81,7 +89,8 @@ overall_table <- function(
     n_keys = 1,
     title = title %||% "Scenario Comparison: Overall",
     subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
-    years = sel$years
+    years = sel$years,
+    time_format = time_format
   )
 }
 
@@ -100,8 +109,12 @@ calls_table <- function(
   metrics = NULL,
   baseline_name = "Baseline",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  time_format = c("decimal", "mmss"),
+  digits = 2
 ) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
   sel <- select_compare(df, scenario, filter_name, due)
   metrics <- metrics %||% unique(sel$df$metric)
   check_metrics(metrics, sel$df$metric)
@@ -115,8 +128,8 @@ calls_table <- function(
     is_change <- grepl("_change$", metrics)
     body[[paste0("s", k)]] <- ifelse(
       is_change,
-      format_values(rows$value, metrics, diff = TRUE),
-      format_values(rows$value, metrics)
+      fmt(rows$value, metrics, diff = TRUE),
+      fmt(rows$value, metrics)
     )
     colors[[paste0("s", k)]] <- ifelse(is_change, diff_colors(rows$value, metrics), NA_character_)
   }
@@ -129,7 +142,8 @@ calls_table <- function(
     n_keys = 1,
     title = title %||% "Scenario Comparison: Call-Level Changes",
     subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
-    years = sel$years
+    years = sel$years,
+    time_format = time_format
   )
 }
 
@@ -155,7 +169,9 @@ fdz_table <- function(
   baseline_name = "Baseline",
   title = NULL,
   subtitle = NULL,
-  pct_total = FALSE
+  pct_total = FALSE,
+  time_format = c("decimal", "mmss"),
+  digits = 2
 ) {
   rows_table(
     df, key = "fdz_id", key_label = "FDZ",
@@ -164,7 +180,9 @@ fdz_table <- function(
     neutral = FALSE,
     responders = TRUE,
     title = title, subtitle = subtitle,
-    pct_total = pct_total
+    pct_total = pct_total,
+    time_format = match.arg(time_format),
+    digits = digits
   )
 }
 
@@ -188,7 +206,9 @@ station_table <- function(
   baseline_name = "Baseline",
   title = NULL,
   subtitle = NULL,
-  pct_total = FALSE
+  pct_total = FALSE,
+  time_format = c("decimal", "mmss"),
+  digits = 2
 ) {
   rows_table(
     df, key = "source_id", key_label = "Station",
@@ -197,7 +217,9 @@ station_table <- function(
     neutral = TRUE,
     responders = FALSE,
     title = title, subtitle = subtitle,
-    pct_total = pct_total
+    pct_total = pct_total,
+    time_format = match.arg(time_format),
+    digits = digits
   )
 }
 
@@ -225,6 +247,7 @@ station_table <- function(
 #' @param baseline_name Name of the baseline scenario, for its row and the
 #'   subtitle.
 #' @param title,subtitle Override the automatic title and subtitle.
+#' @inheritParams overall_table
 #'
 #' @return A flextable.
 #' @noRd
@@ -240,8 +263,12 @@ scenario_summary_table <- function(
   sort_by = NULL,
   baseline_name = "Baseline",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  time_format = c("decimal", "mmss"),
+  digits = 2
 ) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
   overall_df <- as.data.frame(overall_df)
   sel <- select_compare(overall_df, scenario %||% unique(overall_df$scenario_name), filter_name, due)
   scen <- sel$scenarios
@@ -265,9 +292,9 @@ scenario_summary_table <- function(
     d <- vapply(scen, function(sc) value_of(sel$df, sc, m, "diff"), numeric(1))
     columns[[m]] <- list(
       label = metric_label(m, sel$years),
-      base = format_values(value_of(sel$df, scen[1], m, "baseline"), m),
+      base = fmt(value_of(sel$df, scen[1], m, "baseline"), m),
       num = d,
-      text = format_values(d, m, diff = TRUE),
+      text = fmt(d, m, diff = TRUE),
       color = diff_colors(d, m)
     )
   }
@@ -285,7 +312,7 @@ scenario_summary_table <- function(
         label = metric_label(m, csel$years),
         base = "",
         num = v,
-        text = format_values(v, m),
+        text = fmt(v, m),
         color = rep(NA_character_, length(v))
       )
     }
@@ -367,7 +394,8 @@ scenario_summary_table <- function(
       },
       ". Bold: best scenario in each column."
     ),
-    max_col_width = 1.3
+    max_col_width = 1.3,
+    time_format = time_format
   )
 
   ft <- flextable::italic(ft, i = 1, part = "body")
@@ -427,8 +455,10 @@ save_table <- function(ft, path) {
 
 rows_table <- function(
   df, key, key_label, scenario, filter_name, due, metrics, baseline_name,
-  title_prefix, neutral, responders, title, subtitle, pct_total = FALSE
+  title_prefix, neutral, responders, title, subtitle, pct_total = FALSE,
+  time_format = "decimal", digits = 2
 ) {
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
   sel <- select_compare(df, scenario, filter_name, due)
   check_metrics(metrics, sel$df$metric)
   if (length(sel$scenarios) > 1 && length(metrics) > 1) {
@@ -480,11 +510,11 @@ rows_table <- function(
       s <- fill_zero(get(sc, m, "scenario"), m)
       d <- if (neutral && is_count(m)) s - b else get(sc, m, "diff")
       with_pct <- pct_total && is_count(m)
-      body[[paste0(m, "_b")]] <- format_values(b, m)
+      body[[paste0(m, "_b")]] <- fmt(b, m)
       if (with_pct) body[[paste0(m, "_bp")]] <- format_pct_of_total(b)
-      body[[paste0(m, "_s")]] <- format_values(s, m)
+      body[[paste0(m, "_s")]] <- fmt(s, m)
       if (with_pct) body[[paste0(m, "_sp")]] <- format_pct_of_total(s)
-      body[[paste0(m, "_d")]] <- format_values(d, m, diff = TRUE)
+      body[[paste0(m, "_d")]] <- fmt(d, m, diff = TRUE)
       colors[[paste0(m, "_b")]] <- NA_character_
       if (with_pct) colors[[paste0(m, "_bp")]] <- NA_character_
       colors[[paste0(m, "_s")]] <- NA_character_
@@ -509,7 +539,7 @@ rows_table <- function(
     }
     b <- fill_zero(b, m)
     with_pct <- pct_total && is_count(m)
-    body$baseline <- format_values(b, m)
+    body$baseline <- fmt(b, m)
     colors$baseline <- NA_character_
     labels <- c(labels, "Baseline")
     groups <- c(groups, NA)
@@ -530,7 +560,7 @@ rows_table <- function(
         colors[[paste0("s", k, "_station")]] <- NA_character_
         new <- "Station"
       }
-      body[[paste0("s", k, "_s")]] <- format_values(s, m)
+      body[[paste0("s", k, "_s")]] <- fmt(s, m)
       colors[[paste0("s", k, "_s")]] <- NA_character_
       new <- c(new, "Scenario")
       if (with_pct) {
@@ -538,7 +568,7 @@ rows_table <- function(
         colors[[paste0("s", k, "_sp")]] <- NA_character_
         new <- c(new, "% of Total")
       }
-      body[[paste0("s", k, "_d")]] <- format_values(d, m, diff = TRUE)
+      body[[paste0("s", k, "_d")]] <- fmt(d, m, diff = TRUE)
       colors[[paste0("s", k, "_d")]] <- diff_color(d, m)
       new <- c(new, "Diff")
       labels <- c(labels, new)
@@ -554,7 +584,8 @@ rows_table <- function(
     n_keys = n_keys,
     title = title %||% if (length(metrics) == 1) paste0(title_prefix, ": ", metric_label(metrics, sel$years)) else title_prefix,
     subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
-    years = sel$years
+    years = sel$years,
+    time_format = time_format
   )
 }
 
@@ -675,6 +706,10 @@ metric_label <- function(metric, years = NULL) {
       return(metric_labels[[m]])
     }
     x <- sub(".*_(\\d+(\\.\\d+)?)min$", "\\1", m)
+    # thresholds in minutes and seconds (threshold_key()): 8m58s -> 8:58
+    if (grepl("_\\d+m\\d{2}s$", m)) {
+      x <- sub(".*_(\\d+)m(\\d{2})s$", "\\1:\\2", m)
+    }
     if (grepl("^pct_within_", m)) return(paste0("Within ", x, " Min"))
     if (grepl("^calls_within_", m)) return(paste0("Calls Within ", x, " Min"))
     if (grepl("^fdz_p90_over_", m)) return(paste0("FDZs With 90th Percentile Over ", x, " Min"))
@@ -693,9 +728,10 @@ is_share <- function(m) grepl("^(pct_within_|share_)", m)
 is_count <- function(m) grepl("^(n_|calls_|unserved_|fdz_p90_over_)", m) | m == "total_minutes"
 is_distance <- function(m) m == "mean_distance_m"
 
-# Values as display text: counts with separators, minutes 1 decimal, shares as
-# percent (their diffs in percentage points), distance in miles
-format_values <- function(x, metrics, diff = FALSE) {
+# Values as display text: counts with separators, times with `digits` decimals
+# (or as m:ss with time_format = "mmss"), shares as percent (their diffs in
+# percentage points), distance in miles
+format_values <- function(x, metrics, diff = FALSE, time_format = "decimal", digits = 2) {
   metrics <- rep_len(metrics, length(x))
   out <- character(length(x))
   for (i in seq_along(x)) {
@@ -712,11 +748,21 @@ format_values <- function(x, metrics, diff = FALSE) {
       paste0(sign, formatC(v / 1609.344, format = "f", digits = 2, big.mark = ","))
     } else if (is_count(m)) {
       paste0(sign, formatC(round(v), format = "d", big.mark = ","))
+    } else if (time_format == "mmss") {
+      format_mmss(v, diff)
     } else {
-      paste0(sign, formatC(v, format = "f", digits = 1, big.mark = ","))
+      paste0(sign, formatC(v, format = "f", digits = digits, big.mark = ","))
     }
   }
   out
+}
+
+# Minutes as m:ss, rounded to the second: 7.5 -> "7:30"; a diff carries its
+# sign ("+1:05", "-0:30"), and no change is "0:00"
+format_mmss <- function(v, diff = FALSE) {
+  secs <- round(abs(v) * 60)
+  sign <- if (secs == 0) "" else if (v < 0) "-" else if (diff) "+" else ""
+  sprintf("%s%d:%02d", sign, secs %/% 60, secs %% 60)
 }
 
 # Each value as a percent of the column's total (the rows shown)
@@ -729,9 +775,9 @@ format_pct_diff <- function(x, metrics) {
   ifelse(is.na(x) | is_share(metrics), "", sprintf("%+.1f%%", x * 100))
 }
 
-format_ci <- function(lower, upper, metrics) {
-  lo <- format_values(lower, metrics, diff = TRUE)
-  hi <- format_values(upper, metrics, diff = TRUE)
+format_ci <- function(lower, upper, metrics, time_format = "decimal", digits = 2) {
+  lo <- format_values(lower, metrics, diff = TRUE, time_format, digits)
+  hi <- format_values(upper, metrics, diff = TRUE, time_format, digits)
   ifelse(lo == "" | hi == "", "", paste0("[", lo, ", ", hi, "]"))
 }
 
@@ -770,10 +816,11 @@ neutral_colors <- function(x) {
 # text colour per cell (NA for default); the first `n_keys` columns are row
 # labels. `years` (or NULL) adds a footer line saying the counts are yearly;
 # `notes` are added to the footer; `max_col_width` (inches) caps the value
-# columns so long headers wrap.
+# columns so long headers wrap; `time_format = "mmss"` notes that times are
+# minutes:seconds.
 build_table <- function(
   body, labels, groups, colors, n_keys, title, subtitle,
-  years = NULL, notes = NULL, max_col_width = NULL
+  years = NULL, notes = NULL, max_col_width = NULL, time_format = "decimal"
 ) {
   names(colors) <- names(body)
   ft <- flextable::flextable(body)
@@ -813,6 +860,9 @@ build_table <- function(
   note <- "Modelled OSRM drive time; CAD run card order. Diff = scenario minus baseline."
   if (!is.null(years)) {
     note <- paste0(note, " Call counts are yearly averages over ", sprintf("%.1f", years), " years.")
+  }
+  if (time_format == "mmss") {
+    note <- paste0(note, " Times are minutes:seconds.")
   }
   # extra notes go on their own lines, which wrap rather than widen the table
   ft <- flextable::add_footer_lines(ft, c(note, notes))

@@ -20,7 +20,10 @@
 #'   the confidence intervals can be repeated; recorded in the Settings sheet.
 #'
 #' @return Invisibly, a named list of the sheets' data frames: Settings,
-#'   Scenarios, Filter Sets, Overall, Calls, By FDZ, By Station.
+#'   Scenarios, Filter Sets, Overall, Calls, By FDZ, By Station. Its
+#'   `"paired"` attribute holds the call-level [paired_calls()] table the
+#'   comparisons were built from (not written to the workbook), for
+#'   [travel_time_boxplot()].
 #' @noRd
 export_comparison <- function(
   scenarios,
@@ -56,6 +59,7 @@ export_comparison <- function(
   )
 
   write_workbook(sheets, file)
+  attr(sheets, "paired") <- paired
   invisible(sheets)
 }
 
@@ -79,7 +83,7 @@ settings_sheet <- function(matrix_df, due, thresholds, slower_by, ci, n_boot, le
       format(length(unique(matrix_df$dest_id)), big.mark = ","),
       length(unique(matrix_df$source_id)),
       listed(due),
-      listed(thresholds),
+      listed(threshold_text(thresholds)),
       listed(slower_by),
       if (ci) "Yes" else "No",
       if (ci) n_boot else "",
