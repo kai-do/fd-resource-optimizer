@@ -119,6 +119,9 @@ scenario_1_r1_r26 <- scenarios[1]
 scenario_2_r1 <- scenarios[2]
 scenario_3_r1_r11 <- scenarios[3]
 
+# The best scenario, used by the call, station and FDZ examples below
+example_scenario <- scenario_1_r1_r26
+
 # Overall: one row per metric; Baseline / Scenario / Diff / % Diff (and 95% CI)
 overall_table(
   df = cmp_overall,
