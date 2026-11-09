@@ -4,6 +4,8 @@
 #   overall       one box per scenario
 #   station       per territory station
 #   fdz           per zone, for the zones you pick
+# a cumulative curve (ECDF), and a forest plot of every pair of those
+# scenarios against each other, with bootstrap intervals (pairs_forest.png)
 #
 # The top scenarios are the best n_top on rank_by (as in step 07), or the ones
 # you name in top_scenarios.
@@ -150,5 +152,34 @@ travel_time_ecdf(
   subtitle = NULL
 ) |>
   save_plot(file.path(plots_dir, "ecdf_overall.png"), width = 8, height = 5)
+
+# Scenario vs scenario: every pair of the groups (first minus second), a dot
+# per difference and a line across its interval. The same comparison as step
+# 07's tbl_scenario_pairs: keep the seed, scenarios and metrics in step.
+set.seed(343)
+cmp_pairs <- compare_scenarios(
+  paired,
+  scenario = groups, # names or ids, baseline included
+  metrics = c(
+    "mean_minutes",
+    "p90_minutes",
+    "pct_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_10m21s" # 10:21, EMS High ERF
+  ),
+  filter_name = filter_set,
+  due = due_level,
+  baseline_name = baseline_name,
+  n_boot = 1000,
+  level = 0.95
+)
+n_pairs <- nrow(unique(cmp_pairs[c("scenario_a", "scenario_b")]))
+
+scenario_pairs_plot(
+  cmp_pairs,
+  metrics = NULL, # NULL = every metric in cmp_pairs, one panel each
+  title = NULL,
+  subtitle = NULL
+) |>
+  save_plot(file.path(plots_dir, "pairs_forest.png"), width = 12, height = 1.8 + 0.45 * n_pairs)
 
 message("Plots written to ", plots_dir)

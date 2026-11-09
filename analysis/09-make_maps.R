@@ -6,6 +6,7 @@
 #   territory     1st-due station per zone, baseline and scenario side by side
 #   benchmark     % of calls reached within each benchmark, per zone
 #   demand        calls per year per zone (once, not per scenario)
+#   demand_density calls per year per square mile, per zone (once)
 #
 # The top scenarios are the best n_top on rank_by (as in steps 07 and 08), or
 # the ones you name in top_scenarios.
@@ -46,6 +47,9 @@ benchmarks <- c(
 
 time_format <- "decimal" # or "mmss"
 tiles <- TRUE
+
+# Legend under the map ("bottom") or beside it ("right"); static maps only
+legend_position <- "bottom"
 
 # Config ----------------------------------------------------------------------
 
@@ -119,6 +123,7 @@ for (scenario in top) {
         time_format = time_format,
         interactive = interactive, # TRUE = leaflet web page
         tiles = tiles, # street tiles under static maps
+        legend_position = legend_position, # "bottom" or "right"
         title = NULL, # NULL = automatic
         subtitle = NULL
       )
@@ -135,7 +140,8 @@ for (scenario in top) {
         filter_name = filter_set,
         due = due_level,
         interactive = interactive,
-        tiles = tiles
+        tiles = tiles,
+        legend_position = legend_position
       )
     },
     paste0("territory_", stub),
@@ -154,7 +160,8 @@ for (scenario in top) {
           filter_name = filter_set,
           due = due_level,
           interactive = interactive,
-          tiles = tiles
+          tiles = tiles,
+          legend_position = legend_position
         )
       },
       paste0("benchmark_", b, "_", stub),
@@ -174,10 +181,32 @@ save_both(
       filter_name = filter_set,
       due = due_level,
       interactive = interactive,
-      tiles = tiles
+      tiles = tiles,
+      legend_position = legend_position
     )
   },
   "demand"
+)
+
+# Calls per year per square mile: demand weighted by zone area, so big and
+# small zones compare fairly. The color scale tops out at the cap quantile
+# (zones above it share the darkest color; hover shows exact values)
+save_both(
+  function(interactive) {
+    fdz_demand_map(
+      fdz_compare, fdz_sf, stations, scenarios,
+      scenario = NULL,
+      years = years,
+      density = TRUE,
+      cap = 0.95, # 1 = no cap
+      filter_name = filter_set,
+      due = due_level,
+      interactive = interactive,
+      tiles = tiles,
+      legend_position = legend_position
+    )
+  },
+  "demand_density"
 )
 
 message("Maps written to ", maps_dir)

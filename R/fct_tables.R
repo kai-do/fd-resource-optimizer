@@ -7,6 +7,10 @@
 #   station_table(cmp_station, scenario = c("R26->16 +R1", "R11->16 +R1"))
 #   fdz_table(cmp_fdz, metrics = c("median_minutes", "p90_minutes"))
 #   calls_table(cmp_calls) |> save_table("calls.docx")
+#
+# And scenarios against each other, from compare_scenarios():
+#
+#   scenario_pairs_table(cmp_pairs, time_format = "mmss")
 
 #' Overall comparison table
 #'
@@ -432,6 +436,75 @@ rank_scenarios <- function(df, by = "total_minutes", filter_name = NULL, due = N
   rows$scenario_name
 }
 
+#' Scenario-vs-scenario table
+#'
+#' @param df Output of [compare_scenarios()].
+#' @param metrics Metrics to show, in order. `NULL` shows every one in `df`.
+#' @inheritParams overall_table
+#'
+#' @return A flextable: one row per pair, with First, Second, Diff (first
+#'   minus second) and CI columns per metric. A diff is colored only when its
+#'   interval excludes 0: green when the first scenario is better, red when
+#'   worse.
+#' @noRd
+scenario_pairs_table <- function(
+  df,
+  metrics = NULL,
+  filter_name = NULL,
+  due = NULL,
+  title = NULL,
+  subtitle = NULL,
+  time_format = c("decimal", "mmss"),
+  digits = 2
+) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
+  df <- as.data.frame(df)
+  filter_name <- pick_one(df$filter_name, filter_name, "filter set")
+  due <- pick_one(df$due, due, "due level")
+  df <- df[df$filter_name == filter_name & df$due == due, ]
+  metrics <- metrics %||% unique(df$metric)
+  check_metrics(metrics, df$metric)
+
+  pairs <- unique(df[c("scenario_a", "scenario_b")])
+  pair_key <- paste(pairs$scenario_a, pairs$scenario_b, sep = "\r")
+  ci_label <- paste0(round(df$level[1] * 100), "% CI")
+
+  body <- data.frame(scenario_a = pairs$scenario_a, scenario_b = pairs$scenario_b)
+  colors <- data.frame(scenario_a = rep(NA_character_, nrow(pairs)), scenario_b = NA_character_)
+  labels <- c("Scenario", "vs")
+  groups <- c(NA, NA)
+  for (m in metrics) {
+    rows <- df[df$metric == m, ]
+    rows <- rows[match(pair_key, paste(rows$scenario_a, rows$scenario_b, sep = "\r")), ]
+    body[[paste0(m, "_a")]] <- fmt(rows$value_a, m)
+    body[[paste0(m, "_b")]] <- fmt(rows$value_b, m)
+    body[[paste0(m, "_d")]] <- fmt(rows$diff, m, diff = TRUE)
+    body[[paste0(m, "_ci")]] <- format_ci(rows$ci_lower, rows$ci_upper, m, time_format, digits)
+    colors[[paste0(m, "_a")]] <- NA_character_
+    colors[[paste0(m, "_b")]] <- NA_character_
+    colors[[paste0(m, "_d")]] <- ifelse(rows$ci_excludes_zero, diff_colors(rows$diff, m), NA_character_)
+    colors[[paste0(m, "_ci")]] <- NA_character_
+    labels <- c(labels, "First", "Second", "Diff", ci_label)
+    groups <- c(groups, rep(metric_label(m), 4))
+  }
+
+  build_table(
+    body, labels,
+    groups = groups,
+    colors = colors,
+    n_keys = 2,
+    title = title %||% "Scenario vs Scenario",
+    subtitle = subtitle %||% paste(filter_name, paste(due_ordinal(due), "Due"), sep = " · "),
+    note = "Modeled OSRM drive time; CAD run card order. Diff = first minus second scenario, on the calls both serve.",
+    notes = paste(
+      ci_label, "from resampling whole FDZs. A diff is colored only when its CI excludes 0;",
+      "a CI that crosses 0 means the two scenarios can't be told apart on these calls."
+    ),
+    time_format = time_format
+  )
+}
+
 #' Save a table to Word or PNG
 #'
 #' @param ft A flextable.
@@ -815,12 +888,13 @@ neutral_colors <- function(x) {
 # (or NULL) gives a spanner label per column, NA for none; `colors` holds a
 # text color per cell (NA for default); the first `n_keys` columns are row
 # labels. `years` (or NULL) adds a footer line saying the counts are yearly;
-# `notes` are added to the footer; `max_col_width` (inches) caps the value
+# `note` (or NULL for the scenario-minus-baseline one) is the first footer
+# line; `notes` are added to the footer; `max_col_width` (inches) caps the value
 # columns so long headers wrap; `time_format = "mmss"` notes that times are
 # minutes:seconds.
 build_table <- function(
   body, labels, groups, colors, n_keys, title, subtitle,
-  years = NULL, notes = NULL, max_col_width = NULL, time_format = "decimal"
+  years = NULL, notes = NULL, max_col_width = NULL, time_format = "decimal", note = NULL
 ) {
   names(colors) <- names(body)
   ft <- flextable::flextable(body)
@@ -857,7 +931,7 @@ build_table <- function(
   ft <- flextable::italic(ft, i = 2, part = "header")
   ft <- flextable::bold(ft, i = 2, bold = FALSE, part = "header")
   ft <- flextable::align(ft, i = 1:2, align = "left", part = "header")
-  note <- "Modeled OSRM drive time; CAD run card order. Diff = scenario minus baseline."
+  note <- note %||% "Modeled OSRM drive time; CAD run card order. Diff = scenario minus baseline."
   if (!is.null(years)) {
     note <- paste0(note, " Call counts are yearly averages over ", sprintf("%.1f", years), " years.")
   }

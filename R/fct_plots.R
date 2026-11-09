@@ -14,6 +14,11 @@
 # And a cumulative curve per group (% of calls reached within X minutes):
 #
 #   travel_time_ecdf(paired, baseline_name = "Baseline Rescues", benchmarks = c("8 min" = 8))
+#
+# And a forest plot of scenario-vs-scenario differences with their intervals,
+# from compare_scenarios():
+#
+#   scenario_pairs_plot(compare_scenarios(paired, baseline_name = "Baseline Rescues"))
 
 #' Box plots of modeled travel time, baseline and scenarios
 #'
@@ -352,6 +357,77 @@ travel_time_ecdf <- function(
     )
 }
 
+#' Forest plot of scenario-vs-scenario differences
+#'
+#' One row per pair ("A vs B", first pair on top): a dot at the difference,
+#' first minus second, and a line across its bootstrap interval. Pairs whose
+#' interval crosses 0 are drawn as gray open dots: on these calls they can't
+#' be told apart. Several metrics sit side by side, each on its own axis.
+#'
+#' @param df Output of [compare_scenarios()].
+#' @param metrics Metrics to show, in order. `NULL` shows every one in `df`.
+#' @param filter_name,due Filter set and due level to show. `NULL` uses the
+#'   first in `df` (with a message if there are others).
+#' @param title,subtitle Override the automatic title and subtitle.
+#'
+#' @return A ggplot. Times are in minutes, `pct_within` shares in percentage
+#'   points and distances in miles.
+#' @noRd
+scenario_pairs_plot <- function(
+  df,
+  metrics = NULL,
+  filter_name = NULL,
+  due = NULL,
+  title = NULL,
+  subtitle = NULL
+) {
+  df <- as.data.frame(df)
+  filter_name <- pick_one(df$filter_name, filter_name, "filter set")
+  due <- pick_one(df$due, due, "due level")
+  df <- df[df$filter_name == filter_name & df$due == due, ]
+  metrics <- metrics %||% unique(df$metric)
+  check_metrics(metrics, df$metric)
+  df <- df[df$metric %in% metrics, ]
+
+  # display units: shares as percentage points, distance in miles
+  unit <- ifelse(is_share(df$metric), 100, ifelse(is_distance(df$metric), 1 / 1609.344, 1))
+  df$x <- df$diff * unit
+  df$lo <- df$ci_lower * unit
+  df$hi <- df$ci_upper * unit
+
+  pairs <- unique(paste(df$scenario_a, "vs", df$scenario_b))
+  df$pair <- factor(paste(df$scenario_a, "vs", df$scenario_b), levels = rev(pairs))
+  df$facet <- factor(pair_strip_label(df$metric), levels = pair_strip_label(metrics))
+
+  ci_text <- paste0(round(df$level[1] * 100), "% CI")
+  verdicts <- c("Clear difference", paste0("Within noise (", ci_text, " crosses 0)"))
+  df$verdict <- factor(ifelse(df$ci_excludes_zero, verdicts[1], verdicts[2]), levels = verdicts)
+
+  if (is.null(title)) {
+    title <- "Scenario vs Scenario"
+  }
+  if (is.null(subtitle)) {
+    subtitle <- paste(filter_name, paste(due_ordinal(due), "Due"), paste(ci_text, "from resampling whole FDZs"), sep = " · ")
+  }
+
+  ggplot2::ggplot(df, ggplot2::aes(y = pair)) +
+    ggplot2::geom_vline(xintercept = 0, color = plot_ink[["secondary"]], linewidth = 0.4) +
+    ggplot2::geom_linerange(ggplot2::aes(xmin = lo, xmax = hi, color = verdict), linewidth = 0.7, na.rm = TRUE) +
+    ggplot2::geom_point(ggplot2::aes(x = x, color = verdict, shape = verdict), size = 2.6, stroke = 0.9, fill = "white") +
+    ggplot2::facet_wrap(ggplot2::vars(facet), nrow = 1, scales = "free_x") +
+    ggplot2::expand_limits(x = 0) +
+    ggplot2::scale_x_continuous(labels = signed_labels) +
+    ggplot2::scale_color_manual(
+      values = stats::setNames(c(plot_colors[1], plot_ink[["muted"]]), verdicts),
+      drop = FALSE,
+      name = NULL
+    ) +
+    ggplot2::scale_shape_manual(values = stats::setNames(c(19, 21), verdicts), drop = FALSE, name = NULL) +
+    ggplot2::labs(title = title, subtitle = subtitle, x = "Difference, First Minus Second", y = NULL) +
+    plot_theme(horizontal = TRUE, legend = TRUE) +
+    ggplot2::theme(panel.spacing.x = ggplot2::unit(1.5, "lines"))
+}
+
 #' Save a plot to an image file
 #'
 #' @param p A ggplot, e.g. from [travel_time_boxplot()].
@@ -475,6 +551,21 @@ ecdf_points <- function(long, resolution = 0.1) {
   out$group <- factor(out$group, levels = levels(long$group))
   rownames(out) <- NULL
   out
+}
+
+# Facet label for a pairs plot: the metric, its unit when the label doesn't
+# carry one, and which side of 0 favors the first scenario
+pair_strip_label <- function(metric) {
+  label <- metric_label(metric)
+  label <- ifelse(is_share(metric), paste(label, "(pct pts)"), label)
+  better <- ifelse(higher_is_better(metric), "above 0", "below 0")
+  paste0(label, "\n", better, " = first better")
+}
+
+# Axis labels with a sign on gains: -0.5, 0, +0.5
+signed_labels <- function(x) {
+  out <- format(x, trim = TRUE, drop0trailing = TRUE)
+  ifelse(is.na(x), "", ifelse(x > 0, paste0("+", out), out))
 }
 
 # Minutes axis labels and title, as decimal minutes or m:ss

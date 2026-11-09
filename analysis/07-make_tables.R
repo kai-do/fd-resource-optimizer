@@ -9,14 +9,18 @@
 #                         station workload, and the zones whose responder
 #                         changes
 #
+# And, for the first filter set, tbl_scenario_pairs: the baseline and the top
+# scenarios against each other, with bootstrap intervals, to show whether the
+# top scenarios differ by more than chance.
+#
 # The top scenarios are the best n_top on rank_by, or the ones you name in
 # top_scenarios. All tables are written as Word tables (.docx) or images
 # (.png), set by table_format.
 #
 # Inputs  (data_outputs_dir): compare_overall.parquet, compare_calls.parquet,
 #                             compare_fdz.parquet, compare_station.parquet,
-#                             scenarios.parquet, filter_years.parquet
-#                             (step 06)
+#                             scenarios.parquet, filter_years.parquet,
+#                             paired_calls.parquet  (step 06)
 # Outputs (data_outputs_dir): tables/<filter set>/*.docx or *.png
 #
 # Run from the repo root.
@@ -56,6 +60,7 @@ read_output <- function(file) {
 
 scenarios <- read_output("scenarios.parquet")
 years <- read_output("filter_years.parquet")
+paired <- read_output("paired_calls.parquet")
 baseline_name <- scenarios$scenario_name[scenarios$baseline]
 
 # Call counts (calls, incidents, total minutes, calls slower by X min) as
@@ -100,6 +105,47 @@ scenario_summary_table(
   time_format = 'mmss'
 ) |>
   save_table(file.path(tables_dir, "tbl_scenario_summary.docx"))
+
+# Scenario vs scenario --------------------------------------------------------
+#
+# The baseline and the top scenarios, every pair against each other (first
+# minus second, in this order). A diff is colored only when its interval
+# excludes 0; otherwise the two can't be told apart on these calls. Step 08
+# plots the same comparison: keep the seed, scenarios and metrics in step.
+# Metrics: mean_minutes (ranks like total_minutes), median_minutes,
+# p90_minutes, mean_distance_m, pct_within_<threshold>.
+
+pair_scenarios <- c(
+  baseline_name,
+  top_scenarios %||%
+    utils::head(rank_scenarios(cmp_overall, by = rank_by, filter_name = first_filter, due = due_level), n_top)
+)
+
+set.seed(343)
+cmp_pairs <- compare_scenarios(
+  paired,
+  scenario = pair_scenarios, # names or ids, baseline included
+  metrics = c(
+    "mean_minutes",
+    "p90_minutes",
+    "pct_within_8m58s", # 8:58, EMS High First Unit
+    "pct_within_10m21s" # 10:21, EMS High ERF
+  ),
+  filter_name = first_filter,
+  due = due_level,
+  baseline_name = baseline_name,
+  n_boot = 1000,
+  level = 0.95
+)
+
+scenario_pairs_table(
+  cmp_pairs,
+  metrics = NULL, # NULL = every metric in cmp_pairs
+  title = NULL,
+  subtitle = NULL,
+  time_format = "mmss"
+) |>
+  save_table(file.path(tables_dir, "tbl_scenario_pairs.docx"))
 
 # Example tables, every argument and metric spelled out ------------------------
 #

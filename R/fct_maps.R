@@ -9,6 +9,7 @@
 #   fdz_territory_map(fdz_compare, fdz_sf, stations_df, scenarios, "R26->16 +R1")
 #   fdz_benchmark_map(fdz_compare, fdz_sf, stations_df, scenarios, "+R1", threshold = 8 + 58 / 60)
 #   fdz_demand_map(fdz_compare, fdz_sf, stations_df, scenarios, years = 3)
+#   fdz_demand_map(fdz_compare, fdz_sf, stations_df, scenarios, years = 3, density = TRUE)
 #   m |> save_map("change.png")    # or .html with interactive = TRUE
 #
 # Static maps sit on CARTO light street tiles (downloaded and cached the first
@@ -36,6 +37,9 @@
 #' @param interactive `TRUE` returns a leaflet map instead of a ggplot.
 #' @param tiles Draw street tiles under a static map (needs internet the
 #'   first time).
+#' @param legend_position Where a static map's legend goes: `"bottom"`
+#'   (under the map, side by side) or `"right"`. Interactive maps keep theirs
+#'   in the bottom-right corner.
 #' @param title,subtitle Override the automatic title and subtitle.
 #'
 #' @return A ggplot, or a leaflet htmlwidget with `interactive = TRUE`.
@@ -52,6 +56,7 @@ fdz_change_map <- function(
   time_format = c("decimal", "mmss"),
   interactive = FALSE,
   tiles = TRUE,
+  legend_position = c("bottom", "right"),
   title = NULL,
   subtitle = NULL
 ) {
@@ -84,7 +89,7 @@ fdz_change_map <- function(
     title <- paste("Change in", map_metric_label(metric, time_format, units = FALSE), "by FDZ")
   }
   render_fdz_map(
-    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, title,
+    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, match.arg(legend_position), title,
     map_subtitle(ctx, subtitle, paste(ctx$scenario_name, "vs", ctx$baseline_name))
   )
 }
@@ -107,6 +112,7 @@ fdz_territory_map <- function(
   due = NULL,
   interactive = FALSE,
   tiles = TRUE,
+  legend_position = c("bottom", "right"),
   title = NULL,
   subtitle = NULL
 ) {
@@ -114,12 +120,19 @@ fdz_territory_map <- function(
   zones <- fdz_map_data(ctx, fdz_sf, "n_calls")
   zones <- both_sides(zones, ctx, "source_id")
 
-  responders <- sort(unique(stats::na.omit(zones$value)))
-  colors <- if (length(responders) <= length(plot_colors)) {
-    plot_colors[seq_along(responders)]
+  # Colors keyed on every station that responds in any scenario of the run,
+  # so a station keeps its color from one territory map to the next
+  run <- as.data.frame(fdz_compare)
+  run <- run[run$filter_name == ctx$filter_name & run$due == ctx$due, ]
+  all_responders <- sort(unique(stats::na.omit(c(run$baseline_source_id, run$scenario_source_id))))
+  all_colors <- if (length(all_responders) <= length(map_territory_colors)) {
+    map_territory_colors[seq_along(all_responders)]
   } else {
-    grDevices::hcl.colors(length(responders), "Dynamic")
+    grDevices::hcl.colors(length(all_responders), "Dynamic")
   }
+  names(all_colors) <- all_responders
+  responders <- sort(unique(stats::na.omit(zones$value)))
+  colors <- all_colors[as.character(responders)]
   zones$value <- factor(zones$value, levels = responders)
   zones$hover <- sprintf(
     "<b>FDZ %s</b><br>%s: Station %s<br>%s: Station %s",
@@ -129,15 +142,16 @@ fdz_territory_map <- function(
   )
   fill <- list(
     kind = "factor",
-    colors = stats::setNames(colors, responders),
-    title = paste(due_ordinal(ctx$due), "Due Station")
+    colors = colors,
+    title = paste(due_ordinal(ctx$due), "Due Station"),
+    alpha = map_territory_alpha
   )
 
   if (is.null(title)) {
     title <- paste(due_ordinal(ctx$due), "Due Territories")
   }
   render_fdz_map(
-    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, title,
+    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, match.arg(legend_position), title,
     map_subtitle(ctx, subtitle, "Outlined zones change responder")
   )
 }
@@ -159,6 +173,7 @@ fdz_benchmark_map <- function(
   due = NULL,
   interactive = FALSE,
   tiles = TRUE,
+  legend_position = c("bottom", "right"),
   title = NULL,
   subtitle = NULL
 ) {
@@ -181,7 +196,7 @@ fdz_benchmark_map <- function(
     title <- paste("Calls Reached Within", threshold_text(threshold), "Min by FDZ")
   }
   render_fdz_map(
-    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, title,
+    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, match.arg(legend_position), title,
     map_subtitle(ctx, subtitle)
   )
 }
@@ -191,11 +206,22 @@ fdz_benchmark_map <- function(
 #' Calls are counted once per zone (the same in every scenario). With a
 #' `scenario`, its unit moves are marked on the stations.
 #'
+#' Big zones collect more calls just by covering more ground; `density =
+#' TRUE` divides each zone's calls by its area, so zones of different sizes
+#' compare fairly.
+#'
 #' @inheritParams fdz_change_map
 #' @param scenario Scenario whose stations to mark, or `NULL` for the
 #'   baseline's.
 #' @param years Years the calls cover: one number, or the output of
 #'   [filter_years()] (`filter_years.parquet`).
+#' @param density `TRUE` maps calls per year per square mile instead of
+#'   calls per year.
+#' @param cap With `density`, the quantile where the color scale tops out
+#'   (rounded up to two significant digits), so a few small, busy zones
+#'   don't wash out the rest. Zones above it share the darkest color and the
+#'   legend's top label reads "160+"; hover labels keep the exact values.
+#'   `1` for no cap.
 #' @noRd
 fdz_demand_map <- function(
   fdz_compare,
@@ -204,10 +230,13 @@ fdz_demand_map <- function(
   scenarios_df,
   scenario = NULL,
   years,
+  density = FALSE,
+  cap = 0.95,
   filter_name = NULL,
   due = NULL,
   interactive = FALSE,
   tiles = TRUE,
+  legend_position = c("bottom", "right"),
   title = NULL,
   subtitle = NULL
 ) {
@@ -218,26 +247,49 @@ fdz_demand_map <- function(
     years
   )
   zones$value <- per_year$baseline
-  zones$panel <- factor("Calls per Year")
   zones$outlined <- FALSE
-  zones$hover <- sprintf(
-    "<b>FDZ %s</b><br>%s calls per year",
-    zones$fdz_id, formatC(zones$value, format = "f", digits = 0, big.mark = ",")
-  )
+  count_text <- function(x, digits = 0) formatC(x, format = "f", digits = digits, big.mark = ",")
 
-  fill <- list(
-    kind = "sequential",
-    colors = c("#FDF3E7", "#B3541E"),
-    limits = c(0, max(zones$value, na.rm = TRUE)),
-    title = "Calls per Year",
-    labels = function(x) formatC(x, format = "f", digits = 0, big.mark = ",")
-  )
-
-  if (is.null(title)) {
-    title <- "Calls per Year by FDZ"
+  if (density) {
+    # Area on the sphere (s2), in square meters whatever the polygons' CRS
+    sq_mi <- as.numeric(sf::st_area(sf::st_transform(zones, 4326))) / sq_m_per_sq_mi
+    zones$value <- per_year$baseline / sq_mi
+    zones$hover <- sprintf(
+      "<b>FDZ %s</b><br>%s calls per year per sq mi<br>%s calls per year over %s sq mi",
+      zones$fdz_id, count_text(zones$value), count_text(per_year$baseline), count_text(sq_mi, 2)
+    )
+    top <- max(zones$value, na.rm = TRUE)
+    cap_at <- if (cap < 1) round_up_2(stats::quantile(zones$value, cap, na.rm = TRUE, names = FALSE)) else top
+    capped <- cap_at < top
+    zones$value <- pmin(zones$value, cap_at)
+    zones$panel <- factor("Calls per Year per Square Mile")
+    fill <- list(
+      kind = "sequential",
+      colors = c("#FDF3E7", "#B3541E"),
+      limits = c(0, cap_at),
+      breaks = if (capped) seq(0, cap_at, length.out = 5),
+      title = "Calls per Year per Sq Mi",
+      labels = function(x) ifelse(capped & !is.na(x) & x >= cap_at, paste0(count_text(x), "+"), count_text(x))
+    )
+    if (is.null(title)) {
+      title <- "Calls per Year per Square Mile by FDZ"
+    }
+  } else {
+    zones$panel <- factor("Calls per Year")
+    zones$hover <- sprintf("<b>FDZ %s</b><br>%s calls per year", zones$fdz_id, count_text(zones$value))
+    fill <- list(
+      kind = "sequential",
+      colors = c("#FDF3E7", "#B3541E"),
+      limits = c(0, max(zones$value, na.rm = TRUE)),
+      title = "Calls per Year",
+      labels = function(x) count_text(x)
+    )
+    if (is.null(title)) {
+      title <- "Calls per Year by FDZ"
+    }
   }
   render_fdz_map(
-    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, title,
+    zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, match.arg(legend_position), title,
     map_subtitle(ctx, subtitle)
   )
 }
@@ -273,6 +325,32 @@ save_map <- function(m, path, width = 8, height = 8) {
 map_mid_color <- "#F5F5F2"
 map_na_color <- "#D9D8D3"
 map_outline_color <- "#0b0b0b"
+# Zone boundaries: a light gray, between plot_ink's muted and grid grays, that
+# still shows on white but stands apart from the colored fills
+map_border_color <- "#C3C2BC"
+
+# Territory fills: dark, saturated hues, so that see-through over the light
+# basemap they still sit well below map_border_color in lightness and the
+# zone lines show. Colors go to the run's responders in station-number order;
+# this order keeps touching Cobb rescue territories (stations 1, 9, 11, 14,
+# 16, 21, 23, 24, 26, 27, 30, in any scenario) apart for normal and red-green
+# color-blind vision. Station numbers on the map back up the colors.
+map_territory_colors <- c(
+  "#2e6b5e", "#d4500a", "#1d4fa6", "#0d7f45", "#00809e", "#a87400",
+  "#5f7a00", "#c43c6a", "#8f3f00", "#b81d35", "#6b3db0", "#b0308a"
+)
+map_territory_alpha <- 0.6
+
+sq_m_per_sq_mi <- 2589988.110336
+
+# Round up to two significant digits: 158.6 -> 160, 26.5 -> 27
+round_up_2 <- function(x) {
+  if (!is.finite(x) || x <= 0) {
+    return(x)
+  }
+  step <- 10^(floor(log10(x)) - 1)
+  ceiling(x / step) * step
+}
 
 # Esri World Light Gray Canvas street tiles, keyless (CARTO's now stamp "API
 # KEY REQUIRED" on every tile). Leaflet uses the same tiles
@@ -457,18 +535,18 @@ map_subtitle <- function(ctx, subtitle, extra = NULL) {
   paste(c(ctx$filter_name, paste(due_ordinal(ctx$due), "Due"), extra), collapse = " · ")
 }
 
-render_fdz_map <- function(zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, title, subtitle) {
+render_fdz_map <- function(zones, fill, ctx, fdz_sf, stations_df, interactive, tiles, legend_position, title, subtitle) {
   stations <- map_stations(stations_df, ctx)
   if (interactive) {
     leaflet_fdz_map(zones, fill, fdz_sf, stations, title, subtitle)
   } else {
-    static_fdz_map(zones, fill, fdz_sf, stations, tiles, title, subtitle)
+    static_fdz_map(zones, fill, fdz_sf, stations, tiles, legend_position, title, subtitle)
   }
 }
 
 # Static ------------------------------------------------------------------------
 
-static_fdz_map <- function(zones, fill, fdz_sf, stations, tiles, title, subtitle) {
+static_fdz_map <- function(zones, fill, fdz_sf, stations, tiles, legend_position, title, subtitle) {
   fill_scale <- switch(
     fill$kind,
     diverging = ggplot2::scale_fill_gradient2(
@@ -476,7 +554,7 @@ static_fdz_map <- function(zones, fill, fdz_sf, stations, tiles, title, subtitle
       limits = fill$limits, labels = fill$labels, name = fill$title, na.value = map_na_color
     ),
     sequential = ggplot2::scale_fill_gradient(
-      low = fill$colors[1], high = fill$colors[2],
+      low = fill$colors[1], high = fill$colors[2], breaks = fill$breaks %||% ggplot2::waiver(),
       limits = fill$limits, labels = fill$labels, name = fill$title, na.value = map_na_color
     ),
     factor = ggplot2::scale_fill_manual(
@@ -499,11 +577,15 @@ static_fdz_map <- function(zones, fill, fdz_sf, stations, tiles, title, subtitle
     ggplot2::geom_sf(data = outlined, fill = NA, color = map_outline_color, linewidth = 0.5)
   }
   panels <- if (nlevels(zones$panel) > 1) ggplot2::facet_wrap(ggplot2::vars(panel))
+  # under the map, a color bar runs across, long enough to read its labels
+  fill_guide <- if (legend_position == "bottom" && fill$kind != "factor") {
+    ggplot2::guides(fill = ggplot2::guide_colorbar(theme = ggplot2::theme(legend.key.width = ggplot2::unit(12, "lines"))))
+  }
 
   ggplot2::ggplot() +
     tile_layer +
     ggplot2::geom_sf(data = fdz_sf, fill = NA, color = plot_ink[["muted"]], linewidth = 0.1) +
-    ggplot2::geom_sf(data = zones, ggplot2::aes(fill = value), color = "white", linewidth = 0.15, alpha = 0.8) +
+    ggplot2::geom_sf(data = zones, ggplot2::aes(fill = value), color = map_border_color, linewidth = 0.2, alpha = fill$alpha %||% 0.8) +
     outline_layer +
     ggplot2::geom_sf(data = stations, ggplot2::aes(color = status), size = 1.8) +
     ggplot2::geom_sf_text(
@@ -512,19 +594,25 @@ static_fdz_map <- function(zones, fill, fdz_sf, stations, tiles, title, subtitle
     ) +
     fill_scale +
     ggplot2::scale_color_manual(values = map_station_colors, name = "Station", drop = TRUE) +
+    fill_guide +
     panels +
     ggplot2::coord_sf(crs = 3857, datum = NA) +
     ggplot2::labs(
       title = title, subtitle = subtitle, x = NULL, y = NULL,
       caption = if (tiles) map_tile_credit
     ) +
-    map_theme()
+    map_theme(legend_position)
 }
 
-map_theme <- function() {
+# Legends at the bottom sit side by side, each titled above its keys
+map_theme <- function(legend_position = "bottom") {
+  bottom <- legend_position == "bottom"
   plot_theme(horizontal = FALSE, legend = TRUE) +
     ggplot2::theme(
-      legend.position = "right",
+      legend.position = legend_position,
+      legend.box = if (bottom) "horizontal",
+      legend.title.position = if (bottom) "top",
+      legend.box.spacing = if (bottom) ggplot2::unit(0.3, "lines"),
       axis.text = ggplot2::element_blank(),
       panel.grid = ggplot2::element_blank(),
       strip.text = ggplot2::element_text(color = plot_ink[["secondary"]], face = "bold", size = 11)
@@ -558,8 +646,8 @@ leaflet_fdz_map <- function(zones, fill, fdz_sf, stations, title, subtitle) {
         data = z,
         group = p,
         fillColor = pal(z$value),
-        fillOpacity = 0.75,
-        color = ifelse(z$outlined, map_outline_color, "white"),
+        fillOpacity = fill$alpha %||% 0.75,
+        color = ifelse(z$outlined, map_outline_color, map_border_color),
         weight = ifelse(z$outlined, 2.5, 0.8),
         label = lapply(z$hover, htmltools::HTML),
         highlightOptions = leaflet::highlightOptions(weight = 3, color = map_outline_color, bringToFront = TRUE)
@@ -588,7 +676,7 @@ leaflet_fdz_map <- function(zones, fill, fdz_sf, stations, title, subtitle) {
     leaflet::addLegend(
       "bottomright",
       pal = pal, values = legend_values, title = fill$title,
-      labFormat = label_format, opacity = 0.9
+      labFormat = label_format, opacity = fill$alpha %||% 0.9
     ) |>
     leaflet::addControl(
       htmltools::HTML(sprintf(

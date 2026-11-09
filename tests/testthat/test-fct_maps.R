@@ -111,6 +111,27 @@ test_that("the territory map shows each side's 1st-due station, changed zones ou
   expect_s3_class(p$facet, "FacetWrap")
 })
 
+test_that("territory fills are the dark territory palette, lighter see-through", {
+  p <- map_of(fdz_territory_map, scenario = "No 1")
+  d <- ggplot2::layer_data(p, 2)
+
+  expect_setequal(unique(d$fill), map_territory_colors[1:3]) # responders 1, 3, 7
+  expect_true(all(d$alpha == map_territory_alpha))
+  expect_true(all(ggplot2::layer_data(map_of(fdz_demand_map, years = 1), 2)$alpha == 0.8))
+})
+
+test_that("a station keeps its territory color when another station is off the map", {
+  # without 3C under No 1, station 3 is off that map, but 7 keeps the third
+  # color (the run's responders are 1, 3 and 7), as on the No 3 map
+  fz <- fdz_compare()
+  fz <- fz[!(fz$scenario_name == "No 1" & fz$fdz_id == "3C"), ]
+  p <- fdz_territory_map(fz, map_fdz_sf(), map_stations_df(), map_scenarios(), "No 1", tiles = FALSE)
+  fills <- zone_fills(p, panel = 2)
+
+  expect_equal(unname(fills["1A"]), map_territory_colors[3])
+  expect_equal(levels(p$layers[[2]]$data$value), c("1", "7"))
+})
+
 test_that("the benchmark map shows each side's share within the threshold", {
   p <- map_of(fdz_benchmark_map, scenario = "No 3", threshold = 4)
   zones <- p$layers[[2]]$data
@@ -127,6 +148,48 @@ test_that("the demand map shows calls per year", {
 
   expect_equal(zones$value[match(c("1A", "2B", "3C"), zones$fdz_id)], c(1, 0.5, 0.5))
   expect_null(p$facet$params$facets)
+})
+
+test_that("the density map divides calls per year by each zone's area", {
+  # each zone is a 1,000 ft square: (1000 * 1200 / 3937 m)^2 in square miles
+  # on the plane; the map measures on the sphere, a hair (~0.05%) larger
+  sq_mi <- (1000 * 1200 / 3937)^2 / 2589988.110336
+  p <- map_of(fdz_demand_map, years = 2, density = TRUE, cap = 1)
+  zones <- p$layers[[2]]$data
+
+  expect_equal(zones$value[match(c("1A", "2B", "3C"), zones$fdz_id)], c(1, 0.5, 0.5) / sq_mi, tolerance = 1e-3)
+  expect_match(zones$hover[zones$fdz_id == "1A"], "28 calls per year per sq mi")
+  expect_equal(p$labels$title, "Calls per Year per Square Mile by FDZ")
+})
+
+test_that("the density cap tops out the scale and marks its label with +", {
+  # densities 27.9, 13.9, 13.9: the 95th percentile, 26.5, rounds up to 27
+  p <- map_of(fdz_demand_map, years = 2, density = TRUE)
+  zones <- p$layers[[2]]$data
+  scale <- p$scales$get_scales("fill")
+
+  expect_equal(max(zones$value), 27)
+  expect_equal(scale$get_limits(), c(0, 27))
+  expect_equal(scale$get_labels(), c("0", "7", "14", "20", "27+"))
+  expect_match(zones$hover[zones$fdz_id == "1A"], "28 calls per year per sq mi") # the exact value
+  expect_equal(vapply(c(158.6, 26.5, 160, 0.123), round_up_2, numeric(1)), c(160, 27, 160, 0.13))
+})
+
+test_that("legends go under the map by default, or to the right", {
+  bottom <- map_of(fdz_change_map, scenario = "No 1")
+  right <- map_of(fdz_change_map, scenario = "No 1", legend_position = "right")
+
+  expect_equal(bottom$theme$legend.position, "bottom")
+  expect_equal(bottom$theme$legend.box, "horizontal")
+  expect_s3_class(bottom$guides$guides$fill, "GuideColourbar")
+  expect_equal(right$theme$legend.position, "right")
+  expect_null(right$guides$guides$fill)
+  expect_error(map_of(fdz_change_map, scenario = "No 1", legend_position = "top"), "should be one of")
+})
+
+test_that("zone boundaries are gray, not white", {
+  d <- ggplot2::layer_data(map_of(fdz_territory_map, scenario = "No 1"), 2)
+  expect_true(all(d$colour == map_border_color))
 })
 
 test_that("stations are marked kept, added, removed or without a unit", {
