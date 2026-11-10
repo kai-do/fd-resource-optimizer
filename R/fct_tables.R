@@ -57,6 +57,24 @@ overall_table <- function(
   }
   check_metrics(metrics, sel$df$metric)
   has_ci <- "ci_lower" %in% names(sel$df)
+  # a CI of the long-run difference, or a range for a future period
+  kind <- if (has_ci) {
+    interval_text(
+      if ("level" %in% names(sel$df)) sel$df$level[1] else 0.95,
+      if ("predict_years" %in% names(sel$df)) sel$df$predict_years[1] else NA
+    )
+  }
+  interval_note <- if (has_ci && "resample" %in% names(sel$df)) {
+    by_call <- sel$df$resample[1] == "call"
+    paste0(
+      if (grepl("range", kind$phrase)) {
+        paste0(kind$short, ": where the difference would fall over ", sub("^.*range for ", "", kind$phrase), " with the same pattern of calls")
+      } else {
+        paste0(kind$short, ": how precisely these calls pin down the difference")
+      },
+      if (by_call) "; calls resampled." else "; whole FDZs resampled."
+    )
+  }
 
   body <- data.frame(metric = metric_label(metrics, sel$years))
   colors <- data.frame(metric = rep(NA_character_, length(metrics)))
@@ -80,7 +98,7 @@ overall_table <- function(
     if (has_ci) {
       body[[paste0(id, "_ci")]] <- format_ci(rows$ci_lower, rows$ci_upper, metrics, time_format, digits)
       colors[[paste0(id, "_ci")]] <- NA_character_
-      new_labels <- c(new_labels, "95% CI")
+      new_labels <- c(new_labels, kind$short)
     }
     labels <- c(labels, new_labels)
     groups <- c(groups, rep(sel$scenarios[k], length(new_labels)))
@@ -94,6 +112,7 @@ overall_table <- function(
     title = title %||% "Scenario Comparison: Overall",
     subtitle = subtitle %||% compare_subtitle(sel, baseline_name),
     years = sel$years,
+    notes = interval_note,
     time_format = time_format
   )
 }
@@ -468,7 +487,8 @@ scenario_pairs_table <- function(
 
   pairs <- unique(df[c("scenario_a", "scenario_b")])
   pair_key <- paste(pairs$scenario_a, pairs$scenario_b, sep = "\r")
-  ci_label <- paste0(round(df$level[1] * 100), "% CI")
+  ci <- pairs_ci_text(df)
+  ci_label <- ci$column
 
   body <- data.frame(scenario_a = pairs$scenario_a, scenario_b = pairs$scenario_b)
   colors <- data.frame(scenario_a = rep(NA_character_, nrow(pairs)), scenario_b = NA_character_)
@@ -497,9 +517,12 @@ scenario_pairs_table <- function(
     title = title %||% "Scenario vs Scenario",
     subtitle = subtitle %||% paste(filter_name, paste(due_ordinal(due), "Due"), sep = " · "),
     note = "Modeled OSRM drive time; CAD run card order. Diff = first minus second scenario, on the calls both serve.",
-    notes = paste(
-      ci_label, "from resampling whole FDZs. A diff is colored only when its CI excludes 0;",
-      "a CI that crosses 0 means the two scenarios can't be told apart on these calls."
+    notes = c(
+      paste0(
+        ci$source, ". A diff is colored only when its CI excludes 0; ",
+        "a CI that crosses 0 means the two scenarios can't be told apart on these calls."
+      ),
+      ci$meaning
     ),
     time_format = time_format
   )
@@ -941,7 +964,7 @@ build_table <- function(
   # extra notes go on their own lines, which wrap rather than widen the table
   ft <- flextable::add_footer_lines(ft, c(note, notes))
   ft <- flextable::fontsize(ft, size = 8, part = "footer")
-  ft <- flextable::font(ft, fontname = "Calibri", part = "all")
+  ft <- flextable::font(ft, fontname = output_font, part = "all")
   ft <- flextable::autofit(ft)
 
   widths <- dim(ft)$widths

@@ -110,6 +110,141 @@ test_that("a call one scenario can't serve is left out of that scenario's pairs 
   expect_equal(row_of(out, "No 1", "Only 22")$diff, (7.1 + 7.2 + 3.4 - 22.1 - 22.2 - 22.4) / 3)
 })
 
+test_that("against compares each scenario with every other group, scenario first", {
+  everything <- c("All", "No 1", "No 3")
+  one <- compare_of(scenario = "No 1", against = everything)
+  two <- compare_of(scenario = c("No 3", "No 1"), against = everything)
+
+  expect_equal(paste(one$scenario_a, one$scenario_b), c("No 1 All", "No 1 No 3"))
+  # pairs within scenario first, in its order; no self or repeated pairs
+  expect_equal(paste(two$scenario_a, two$scenario_b), c("No 3 No 1", "No 3 All", "No 1 All"))
+  expect_equal(row_of(one, "No 1", "No 3")$diff, 3.5)
+
+  set.seed(5)
+  without <- compare_of(scenario = c("All", "No 1", "No 3"))
+  set.seed(5)
+  with_null <- compare_of(scenario = c("All", "No 1", "No 3"), against = NULL)
+  expect_identical(without, with_null)
+  expect_equal(unique(without$ci_type), "marginal")
+  expect_equal(without$per_interval_level, rep(0.95, 3))
+  expect_equal(without$n_comparisons, rep(1L, 3))
+})
+
+test_that("calibrate_simultaneous widens intervals only as far as needed", {
+  set.seed(11)
+  n <- 4000
+  q <- function(x, p) stats::quantile(x, p, names = FALSE)
+
+  # one comparison: the ordinary interval
+  x <- stats::rnorm(n)
+  one <- calibrate_simultaneous(x, 0.95)
+  expect_equal(one$alpha, 0.025)
+  expect_equal(c(one$lower, one$upper), c(q(x, 0.025), q(x, 0.975)))
+
+  # perfectly correlated comparisons: no widening
+  same <- calibrate_simultaneous(rbind(x, 2 * x, x + 1), 0.95)
+  expect_equal(same$alpha, 0.025)
+
+  # independent ones: wider, and jointly covering 95% of the resamples
+  draws <- matrix(stats::rnorm(10 * n), nrow = 10)
+  wide <- calibrate_simultaneous(draws, 0.95)
+  inside <- colSums(draws < wide$lower | draws > wide$upper) == 0
+  expect_lt(wide$alpha, 0.025)
+  expect_gt(wide$alpha, 0.025 / 10 / 2) # narrower than Bonferroni, roughly 0.0025
+  expect_gte(mean(inside), 0.95)
+  expect_true(all(wide$lower <= apply(draws, 1, q, 0.025)))
+
+  # a comparison that never varies is always covered and widens nothing
+  with_const <- calibrate_simultaneous(rbind(x, 0), 0.95)
+  expect_equal(with_const$alpha, 0.025)
+  expect_equal(unname(c(with_const$lower[2], with_const$upper[2])), c(0, 0))
+})
+
+test_that("simultaneous intervals hold per metric over all pairs", {
+  set.seed(3)
+  metrics <- c("mean_minutes", "pct_within_4min")
+  out <- compare_scenarios(
+    paired(), c("All", "No 1", "No 3"),
+    metrics = metrics, baseline_name = "All", n_boot = 400, simultaneous = TRUE
+  )
+
+  expect_equal(unique(out$ci_type), "simultaneous")
+  expect_equal(unique(out$n_comparisons), 3L)
+  expect_true(all(out$per_interval_level >= 0.95 & out$per_interval_level <= 1))
+  expect_equal(nrow(out), 3 * 2)
+  expect_equal(row_of(out, "No 1", "No 3")$diff, 3.5) # point values as before
+  expect_true(all(out$ci_lower <= out$ci_upper))
+
+  # identical scenarios still get a zero interval
+  scenarios <- scenarios_with(c(3, 7, 22), "No 1 again")
+  same <- compare_scenarios(
+    paired(scenarios), c("No 1", "No 1 again"), baseline_name = "All", n_boot = 50, simultaneous = TRUE
+  )
+  expect_equal(c(same$ci_lower, same$ci_upper), c(0, 0))
+  expect_false(same$ci_excludes_zero)
+})
+
+test_that("calls can be resampled one by one, simultaneous or not", {
+  set.seed(8)
+  marginal <- compare_of(scenario = c("All", "No 1", "No 3"), resample = "call")
+  set.seed(8)
+  sim <- compare_of(scenario = c("All", "No 1", "No 3"), resample = "call", simultaneous = TRUE)
+
+  expect_equal(unique(marginal$resample), "call")
+  expect_equal(unique(sim$resample), "call")
+  expect_equal(marginal$diff, sim$diff)
+  expect_true(all(marginal$ci_lower <= marginal$ci_upper))
+
+  # four calls: a resample can draw each 0 to 4 times; No 1 minus No 3 is
+  # 6 for I1, I2 and 2 for I4, 0 for I3, so the mean diff stays in [0, 6]
+  pair <- row_of(marginal, "No 1", "No 3")
+  expect_gte(pair$ci_lower, 0)
+  expect_lte(pair$ci_upper, 6)
+})
+
+test_that("overdispersion widens every interval about its difference", {
+  set.seed(9)
+  plain <- compare_of(scenario = c("No 1", "No 3"), resample = "call")
+  set.seed(9)
+  wide <- compare_of(scenario = c("No 1", "No 3"), resample = "call", overdispersion = 4)
+
+  expect_equal(wide$ci_lower - wide$diff, 2 * (plain$ci_lower - plain$diff))
+  expect_equal(wide$ci_upper - wide$diff, 2 * (plain$ci_upper - plain$diff))
+  expect_equal(wide$overdispersion, 4)
+  expect_error(compare_of(overdispersion = 0.5), "1 or more")
+})
+
+test_that("predict_years gives future-period ranges, and needs data_years and calls", {
+  set.seed(4)
+  out <- compare_of(
+    scenario = c("All", "No 1", "No 3"), resample = "call", simultaneous = TRUE,
+    predict_years = 1, data_years = 3
+  )
+  expect_equal(unique(out$predict_years), 1)
+  expect_equal(pairs_ci_text(out)$label, "95% simultaneous range")
+  expect_equal(pairs_ci_text(out)$column, "95% Sim. 1-Yr Range")
+  expect_match(pairs_ci_text(out)$source, "simultaneous ranges for a single year per metric")
+
+  marginal <- compare_of(scenario = c("No 1", "No 3"), resample = "call", predict_years = 1, data_years = 3)
+  expect_equal(pairs_ci_text(marginal)$label, "95% range for a single year")
+  expect_true(is.na(compare_of(scenario = c("No 1", "No 3"))$predict_years))
+
+  expect_error(compare_of(resample = "call", predict_years = 1), "needs data_years")
+  expect_error(compare_of(predict_years = 1, data_years = 3), "resample = \"call\"")
+})
+
+test_that("overdispersion_factor compares period-to-period swings with chance", {
+  # every zone keeps its share exactly: no more than chance
+  steady <- rep(c("a", "b"), times = c(40, 20))
+  expect_equal(overdispersion_factor(steady, rep(1:2, 30)), 1)
+
+  # zone a 30 then 10, zone b 10 then 30: chi-square 20 on 1 df
+  zone <- rep(c("a", "a", "b", "b"), times = c(30, 10, 10, 30))
+  period <- rep(c(1, 2, 1, 2), times = c(30, 10, 10, 30))
+  expect_equal(overdispersion_factor(zone, period), 20)
+  expect_equal(overdispersion_factor(zone, rep(1, length(zone))), 1) # one period: can't tell
+})
+
 # scenario_pairs_plot ---------------------------------------------------------
 
 # A compare_scenarios() result by hand: the first pair clearly differs, the
@@ -157,6 +292,16 @@ test_that("the first pair is drawn on top", {
   expect_equal(levels(p$data$pair), c("A vs C", "A vs B"))
 })
 
+test_that("group_first puts a block per first scenario, rows named by the second", {
+  df <- rbind(pairs_df(), transform(pairs_df(), scenario_a = "B", scenario_b = rep(c("C", "D"), 2)))
+  p <- scenario_pairs_plot(df, metrics = "mean_minutes", group_first = TRUE)
+
+  expect_s3_class(p$facet, "FacetGrid")
+  expect_equal(levels(p$data$group), c("A vs", "B vs"))
+  expect_equal(levels(p$data$pair), c("D", "C", "B")) # first in order on top
+  expect_equal(length(unique(ggplot2::layer_data(p, 3)$PANEL)), 2)
+})
+
 test_that("pair strip labels say which side of 0 favors the first scenario", {
   expect_equal(
     pair_strip_label(c("mean_minutes", "pct_within_8min")),
@@ -177,4 +322,30 @@ test_that("the pairs table has a row per pair and First / Second / Diff / CI per
   expect_equal(body$mean_minutes_ci, c("[-0.80, -0.20]", "[-0.30, +0.10]"))
   expect_equal(body$pct_within_8min_d, c("+10.0 pts", "+2.0 pts"))
   expect_equal(ncol(body), 2 + 4 * 2)
+})
+
+test_that("simultaneous intervals are labeled as such in the plot and table", {
+  sim <- pairs_df()
+  sim$ci_type <- "simultaneous"
+  sim$per_interval_level <- rep(c(0.996, 0.9962), each = 2)
+  sim$n_comparisons <- 2L
+
+  text <- pairs_ci_text(sim)
+  expect_equal(text$label, "95% simultaneous CI")
+  expect_match(text$source, "each 99.6% alone")
+  expect_match(text$meaning, "all 2 CIs hold together 95%")
+  expect_equal(pairs_ci_text(pairs_df())$label, "95% CI")
+
+  p <- scenario_pairs_plot(sim)
+  expect_match(p$labels$subtitle, "simultaneous")
+  expect_true("Within noise (95% simultaneous CI crosses 0)" %in% levels(p$data$verdict))
+
+  ft <- scenario_pairs_table(sim)
+  footer <- ft$footer$dataset[[1]]
+  expect_true(any(grepl("hold together", footer)))
+
+  sim$resample <- "call"
+  sim$overdispersion <- 1.44
+  expect_match(pairs_ci_text(sim)$source, "calls resampled, widened ×1.20 for year-to-year swings")
+  expect_match(pairs_ci_text(pairs_df())$source, "resampling whole FDZs")
 })

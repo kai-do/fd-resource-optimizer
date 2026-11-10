@@ -81,10 +81,21 @@ test_that("the Settings sheet records the run's settings", {
 
   mmss <- read_sheet(export_to_temp(thresholds = c(8, 8 + 58 / 60))$file, "Settings")
   expect_equal(mmss$value[mmss$setting == "thresholds (minutes)"], "8, 8:58")
-  expect_equal(value("confidence intervals"), "Yes")
+  expect_equal(value("intervals"), "95% CI")
   expect_equal(value("bootstrap resamples"), "50")
+  expect_equal(value("resampled"), "whole zones")
   expect_equal(value("seed"), "7")
   expect_equal(value("calls in travel matrix"), "4")
+
+  ranged <- read_sheet(
+    export_to_temp(ci = TRUE, n_boot = 20, resample = "call", predict_years = 1)$file, "Settings"
+  )
+  expect_equal(ranged$value[ranged$setting == "intervals"], "95% range for a single year")
+  expect_equal(ranged$value[ranged$setting == "resampled"], "calls")
+})
+
+test_that("a future-period range needs call resampling", {
+  expect_error(export_to_temp(ci = TRUE, predict_years = 1), "resample = \"call\"")
 })
 
 test_that("the same seed gives the same confidence intervals", {

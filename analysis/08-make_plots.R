@@ -4,14 +4,17 @@
 #   overall       one box per scenario
 #   station       per territory station
 #   fdz           per zone, for the zones you pick
-# a cumulative curve (ECDF), and a forest plot of every pair of those
-# scenarios against each other, with bootstrap intervals (pairs_forest.png)
+# a cumulative curve (ECDF), and forest plots of step 07's scenario-vs-
+# scenario comparison, with simultaneous bootstrap intervals: the top
+# scenarios vs the baseline (pairs_baseline.png), and vs each other and the
+# alternatives (pairs_forest.png)
 #
 # The top scenarios are the best n_top on rank_by (as in step 07), or the ones
 # you name in top_scenarios.
 #
 # Inputs  (data_outputs_dir): paired_calls.parquet, compare_overall.parquet,
 #                             scenarios.parquet  (step 06)
+#                             compare_pairs.parquet  (step 07; run it first)
 # Outputs (data_outputs_dir): plots/*.png
 #
 # Run from the repo root.
@@ -153,33 +156,32 @@ travel_time_ecdf(
 ) |>
   save_plot(file.path(plots_dir, "ecdf_overall.png"), width = 8, height = 5)
 
-# Scenario vs scenario: every pair of the groups (first minus second), a dot
-# per difference and a line across its interval. The same comparison as step
-# 07's tbl_scenario_pairs: keep the seed, scenarios and metrics in step.
-set.seed(343)
-cmp_pairs <- compare_scenarios(
-  paired,
-  scenario = groups, # names or ids, baseline included
-  metrics = c(
-    "mean_minutes",
-    "p90_minutes",
-    "pct_within_8m58s", # 8:58, EMS High First Unit
-    "pct_within_10m21s" # 10:21, EMS High ERF
-  ),
-  filter_name = filter_set,
-  due = due_level,
-  baseline_name = baseline_name,
-  n_boot = 1000,
-  level = 0.95
-)
-n_pairs <- nrow(unique(cmp_pairs[c("scenario_a", "scenario_b")]))
+# Scenario vs scenario: step 07's comparison (the top scenarios against each
+# other and every other group, simultaneous intervals), a dot per difference
+# and a line across its interval. Set the pairs and metrics in step 07.
+# Two charts: the top scenarios against the baseline (pairs_baseline.png), and
+# against each other and the other scenarios (pairs_forest.png), grouped by
+# top scenario
+cmp_pairs <- read_output("compare_pairs.parquet")
+pair_metrics <- c("mean_minutes", "p90_minutes") # NULL = every metric in cmp_pairs, one panel each
+vs_baseline <- cmp_pairs$scenario_b == baseline_name
+n_pairs <- function(df) nrow(unique(df[c("scenario_a", "scenario_b")]))
 
 scenario_pairs_plot(
-  cmp_pairs,
-  metrics = NULL, # NULL = every metric in cmp_pairs, one panel each
-  title = NULL,
+  cmp_pairs[vs_baseline, ],
+  metrics = pair_metrics,
+  title = "Top Scenarios vs Baseline",
   subtitle = NULL
 ) |>
-  save_plot(file.path(plots_dir, "pairs_forest.png"), width = 12, height = 1.8 + 0.45 * n_pairs)
+  save_plot(file.path(plots_dir, "pairs_baseline.png"), width = 10, height = 2.2 + 0.45 * n_pairs(cmp_pairs[vs_baseline, ]))
+
+scenario_pairs_plot(
+  cmp_pairs[!vs_baseline, ],
+  metrics = pair_metrics,
+  title = "Top Scenarios vs Each Other and the Alternatives",
+  subtitle = NULL,
+  group_first = TRUE # a block per top scenario
+) |>
+  save_plot(file.path(plots_dir, "pairs_forest.png"), width = 10, height = 2.6 + 0.4 * n_pairs(cmp_pairs[!vs_baseline, ]))
 
 message("Plots written to ", plots_dir)

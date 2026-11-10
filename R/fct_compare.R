@@ -27,16 +27,23 @@
 #' @param thresholds Minutes for the `pct_within_<t>`, `calls_within_<t>`
 #'   and `fdz_p90_over_<t>` metrics. `<t>` is `8min` for whole minutes, or
 #'   minutes and seconds such as `8m58s` for 8:58 (give it as `8 + 58 / 60`).
-#' @param ci Add bootstrap confidence intervals (`ci_lower`, `ci_upper`) for
-#'   the time, distance and `pct_within` diffs. Whole zones are resampled,
-#'   because calls in a zone share a responder and are not independent. The
-#'   interval reflects which calls happened to occur, not error in the
-#'   modeled travel times. Use `set.seed()` first for repeatable intervals.
+#' @param ci Add bootstrap intervals (`ci_lower`, `ci_upper`) for the time,
+#'   distance and `pct_within` diffs. They reflect which calls happened to
+#'   occur, not error in the modeled travel times. Use `set.seed()` first for
+#'   repeatable intervals.
 #' @param n_boot,level Number of bootstrap resamples and interval level.
+#' @param resample What is resampled: `"zone"`, whole zones (the default), or
+#'   `"call"`, each call on its own.
+#' @param predict_years `NULL` gives a confidence interval for the long-run
+#'   difference. A number of years (with `resample = "call"`) gives instead
+#'   the range the difference would fall in over a future period that long,
+#'   with the same pattern of calls; the data's years are each filter set's
+#'   [filter_years()].
 #'
 #' @return One row per filter set, scenario, due level and metric:
 #'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `metric`,
-#'   `baseline`, `scenario`, `diff`, `pct_diff` (and `ci_lower`, `ci_upper`).
+#'   `baseline`, `scenario`, `diff`, `pct_diff` (and, with `ci`, `ci_lower`,
+#'   `ci_upper`, `level`, `resample` and `predict_years`).
 #' @noRd
 compare_overall <- function(
   scenarios,
@@ -47,15 +54,24 @@ compare_overall <- function(
   thresholds = c(4, 8),
   ci = FALSE,
   n_boot = 1000,
-  level = 0.95
+  level = 0.95,
+  resample = c("zone", "call"),
+  predict_years = NULL
 ) {
+  resample <- match.arg(resample)
+  check_predict(predict_years, resample)
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
-  compare_overall_paired(paired, thresholds, ci, n_boot, level)
+  data_years <- if (!is.null(predict_years)) filter_years(filters, matrix_df)
+  compare_overall_paired(paired, thresholds, ci, n_boot, level, resample, predict_years, data_years)
 }
 
 # compare_overall() from precomputed paired_calls(), so several
-# comparisons can share one (slow) run card assignment
-compare_overall_paired <- function(paired, thresholds, ci, n_boot, level) {
+# comparisons can share one (slow) run card assignment. `data_years`:
+# filter_years(), needed with predict_years
+compare_overall_paired <- function(
+  paired, thresholds, ci, n_boot, level,
+  resample = "zone", predict_years = NULL, data_years = NULL
+) {
   groups <- split_groups(paired)
 
   out <- lapply(groups, function(g) {
@@ -82,8 +98,13 @@ compare_overall_paired <- function(paired, thresholds, ci, n_boot, level) {
     rows <- add_diffs(rows)
 
     if (ci) {
-      intervals <- bootstrap_diffs(both, thresholds, n_boot, level)
+      share <- if (!is.null(predict_years)) predict_years / data_years$years[match(g$filter_name[1], data_years$filter_name)]
+      cluster <- if (resample == "zone") both$fdz_id else both$dest_id
+      intervals <- bootstrap_diffs(both, thresholds, n_boot, level, cluster = cluster, predict_share = share)
       rows <- merge(rows, intervals, by = "metric", all.x = TRUE, sort = FALSE)
+      rows$level <- level
+      rows$resample <- resample
+      rows$predict_years <- predict_years %||% NA_real_
     }
 
     cbind(g[1, c("filter_name", "scenario_id", "scenario_name", "due")], rows, row.names = NULL)
@@ -458,60 +479,23 @@ sort_compare <- function(out, paired, then, metric_order) {
 }
 
 # Bootstrap intervals for the scenario minus baseline diffs on the paired
-# calls, resampling whole zones (port of legacy bootstrap_response_diff()).
-# A resample is fully described by how many times each zone is drawn, so each
-# side is sorted once and the weighted order statistics are read from running
-# counts, matching quantile(type = 7) on the resampled calls.
-bootstrap_diffs <- function(both, thresholds, n_boot, level) {
-  metrics <- c(
-    "mean_minutes",
-    "median_minutes",
-    "p90_minutes",
-    "mean_distance_m",
-    paste0("pct_within_", threshold_key(thresholds))
-  )
+# calls (port of legacy bootstrap_response_diff()). `cluster` says what is
+# resampled: whole zones by default, or each call on its own.
+# `predict_share` (the future period's calls as a share of the data's, e.g.
+# 1/3 for one year of three) turns the interval into a prediction range:
+# where the diff would fall over such a period, not the long-run average.
+bootstrap_diffs <- function(both, thresholds, n_boot, level, cluster = both$fdz_id, predict_share = NULL) {
+  metrics <- bootstrap_metrics(thresholds)
   if (nrow(both) == 0) {
     return(data.frame(metric = metrics, ci_lower = NA_real_, ci_upper = NA_real_))
   }
 
-  zone <- as.integer(factor(both$fdz_id))
-  n_zone <- max(zone)
-  zone_n <- tabulate(zone, n_zone)
-  zone_sum <- function(x) as.vector(rowsum(as.numeric(x), zone, reorder = TRUE))
-
-  side <- function(prefix) {
-    minutes <- both[[paste0(prefix, "_minutes")]]
-    o <- order(minutes)
-    list(
-      value = minutes[o],
-      zone = zone[o],
-      sums = c(
-        list(minutes = zone_sum(minutes), distance = zone_sum(both[[paste0(prefix, "_distance_m")]])),
-        stats::setNames(lapply(thresholds, function(t) zone_sum(minutes <= t)), paste0("within_", thresholds))
-      )
-    )
-  }
-  sides <- list(baseline = side("baseline"), scenario = side("scenario"))
-
-  draw_stats <- function(s, w) {
-    count <- cumsum(w[s$zone])
-    n <- count[length(count)]
-    order_stat <- function(j) s$value[findInterval(j - 1, count) + 1]
-    q <- vapply(c(0.5, 0.9), function(p) {
-      h <- (n - 1) * p + 1
-      lo <- floor(h)
-      x_lo <- order_stat(lo)
-      x_lo + (h - lo) * (order_stat(min(lo + 1, n)) - x_lo)
-    }, numeric(1))
-    total <- sum(w * zone_n)
-    weighted <- vapply(s$sums, function(z) sum(w * z) / total, numeric(1))
-    c(weighted[["minutes"]], q, weighted[["distance"]], weighted[paste0("within_", thresholds)])
-  }
-
-  draws <- replicate(n_boot, {
-    w <- tabulate(sample.int(n_zone, n_zone, replace = TRUE), n_zone)
-    draw_stats(sides$scenario, w) - draw_stats(sides$baseline, w)
-  })
+  id <- as.integer(factor(cluster))
+  n_cluster <- max(id)
+  diff_of <- bootstrap_diff_fn(both, thresholds, id, n_cluster)
+  draws <- vapply(seq_len(n_boot), function(b) {
+    diff_of(resample_weights(n_cluster, predict_share))
+  }, numeric(length(metrics)))
   draws <- matrix(draws, nrow = length(metrics))
 
   alpha <- (1 - level) / 2
@@ -520,4 +504,101 @@ bootstrap_diffs <- function(both, thresholds, n_boot, level) {
     ci_lower = apply(draws, 1, stats::quantile, alpha, names = FALSE),
     ci_upper = apply(draws, 1, stats::quantile, 1 - alpha, names = FALSE)
   )
+}
+
+# One resample: how many times each of n clusters is drawn. With
+# `predict_share`, two stages: the data resampled (how sure the estimate is),
+# then a future period's share of calls drawn from that (that period's own
+# luck of where calls fall)
+resample_weights <- function(n, predict_share = NULL) {
+  drawn <- sample.int(n, n, replace = TRUE)
+  if (!is.null(predict_share)) {
+    drawn <- drawn[sample.int(n, max(1, round(n * predict_share)), replace = TRUE)]
+  }
+  tabulate(drawn, n)
+}
+
+# The interval's name and its share of calls to predict: a CI of the long-run
+# difference, or a range for a future period of `predict_years`
+interval_text <- function(level, predict_years = NA) {
+  pct <- paste0(signif(100 * level, 3), "%")
+  if (is.null(predict_years) || is.na(predict_years)) {
+    return(list(short = paste(pct, "CI"), phrase = paste(pct, "CI")))
+  }
+  span <- if (predict_years == 1) "a single year" else paste0("a ", predict_years, "-year period")
+  list(
+    short = paste0(pct, " ", predict_years, "-Yr Range"),
+    phrase = paste0(pct, " range for ", span)
+  )
+}
+
+check_predict <- function(predict_years, resample) {
+  if (is.null(predict_years)) {
+    return(invisible())
+  }
+  if (!is.numeric(predict_years) || length(predict_years) != 1 || is.na(predict_years) || predict_years <= 0) {
+    stop("predict_years must be one positive number of years", call. = FALSE)
+  }
+  if (resample != "call") {
+    stop("predict_years needs resample = \"call\": a future period is a draw of calls", call. = FALSE)
+  }
+}
+
+# The metrics bootstrap_diffs() gives intervals for, in its row order
+bootstrap_metrics <- function(thresholds) {
+  c(
+    "mean_minutes",
+    "median_minutes",
+    "p90_minutes",
+    "mean_distance_m",
+    paste0("pct_within_", threshold_key(thresholds))
+  )
+}
+
+# A function of one resample's weights (how many times each of n_cluster
+# clusters is drawn; `id` gives each call's cluster, 1 to n_cluster) that
+# returns the scenario minus baseline diffs, one per bootstrap_metrics().
+# A resample is fully described by those counts, so each side is sorted once
+# and the weighted order statistics are read from running counts, matching
+# quantile(type = 7) on the resampled calls. Clusters with no calls here
+# (n_cluster can cover calls from elsewhere) just add nothing.
+bootstrap_diff_fn <- function(both, thresholds, id, n_cluster) {
+  cluster_n <- tabulate(id, n_cluster)
+  present <- sort(unique(id))
+  cluster_sum <- function(x) {
+    out <- numeric(n_cluster)
+    out[present] <- as.vector(rowsum(as.numeric(x), id, reorder = TRUE))
+    out
+  }
+
+  side <- function(prefix) {
+    minutes <- both[[paste0(prefix, "_minutes")]]
+    o <- order(minutes)
+    list(
+      value = minutes[o],
+      id = id[o],
+      sums = c(
+        list(minutes = cluster_sum(minutes), distance = cluster_sum(both[[paste0(prefix, "_distance_m")]])),
+        stats::setNames(lapply(thresholds, function(t) cluster_sum(minutes <= t)), paste0("within_", thresholds))
+      )
+    )
+  }
+  sides <- list(baseline = side("baseline"), scenario = side("scenario"))
+
+  draw_stats <- function(s, w) {
+    count <- cumsum(w[s$id])
+    n <- count[length(count)]
+    order_stat <- function(j) s$value[findInterval(j - 1, count) + 1]
+    q <- vapply(c(0.5, 0.9), function(p) {
+      h <- (n - 1) * p + 1
+      lo <- floor(h)
+      x_lo <- order_stat(lo)
+      x_lo + (h - lo) * (order_stat(min(lo + 1, n)) - x_lo)
+    }, numeric(1))
+    total <- sum(w * cluster_n)
+    weighted <- vapply(s$sums, function(z) sum(w * z) / total, numeric(1))
+    c(weighted[["minutes"]], q, weighted[["distance"]], weighted[paste0("within_", thresholds)])
+  }
+
+  function(w) draw_stats(sides$scenario, w) - draw_stats(sides$baseline, w)
 }

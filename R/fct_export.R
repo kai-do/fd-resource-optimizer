@@ -37,22 +37,27 @@ export_comparison <- function(
   ci = FALSE,
   n_boot = 1000,
   level = 0.95,
+  resample = c("zone", "call"),
+  predict_years = NULL,
   seed = NULL
 ) {
+  resample <- match.arg(resample)
+  check_predict(predict_years, resample)
   if (inherits(filters, "incident_filter")) {
     filters <- list(filters)
   }
 
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
+  data_years <- if (!is.null(predict_years)) filter_years(filters, matrix_df)
   if (!is.null(seed)) {
     set.seed(seed)
   }
 
   sheets <- list(
-    "Settings" = settings_sheet(matrix_df, due, thresholds, slower_by, ci, n_boot, level, seed),
+    "Settings" = settings_sheet(matrix_df, due, thresholds, slower_by, ci, n_boot, level, resample, predict_years, seed),
     "Scenarios" = scenarios_sheet(scenarios),
     "Filter Sets" = filters_sheet(filters),
-    "Overall" = compare_overall_paired(paired, thresholds, ci, n_boot, level),
+    "Overall" = compare_overall_paired(paired, thresholds, ci, n_boot, level, resample, predict_years, data_years),
     "Calls" = compare_calls_paired(paired, slower_by),
     "By FDZ" = compare_by_fdz_paired(paired, thresholds),
     "By Station" = compare_by_station_paired(paired)
@@ -63,7 +68,10 @@ export_comparison <- function(
   invisible(sheets)
 }
 
-settings_sheet <- function(matrix_df, due, thresholds, slower_by, ci, n_boot, level, seed) {
+settings_sheet <- function(
+  matrix_df, due, thresholds, slower_by, ci, n_boot, level,
+  resample = "zone", predict_years = NULL, seed = NULL
+) {
   listed <- function(x) paste(x, collapse = ", ")
   data.frame(
     setting = c(
@@ -73,8 +81,9 @@ settings_sheet <- function(matrix_df, due, thresholds, slower_by, ci, n_boot, le
       "due levels",
       "thresholds (minutes)",
       "slower by (minutes)",
-      "confidence intervals",
+      "intervals",
       "bootstrap resamples",
+      "resampled",
       "interval level",
       "seed"
     ),
@@ -85,8 +94,9 @@ settings_sheet <- function(matrix_df, due, thresholds, slower_by, ci, n_boot, le
       listed(due),
       listed(threshold_text(thresholds)),
       listed(slower_by),
-      if (ci) "Yes" else "No",
+      if (ci) interval_text(level, predict_years %||% NA)$phrase else "No",
       if (ci) n_boot else "",
+      if (ci) (if (resample == "zone") "whole zones" else "calls") else "",
       if (ci) level else "",
       if (is.null(seed)) "" else seed
     )
@@ -131,6 +141,7 @@ filters_sheet <- function(filters) {
 # shares as percentages, counts as whole numbers, everything else 2 decimals
 write_workbook <- function(sheets, file) {
   wb <- openxlsx::createWorkbook()
+  openxlsx::modifyBaseFont(wb, fontName = output_font)
   header <- openxlsx::createStyle(textDecoration = "bold")
   styles <- list(
     pct = openxlsx::createStyle(numFmt = "0.0%"),

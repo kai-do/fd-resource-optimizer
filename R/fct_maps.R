@@ -590,7 +590,7 @@ static_fdz_map <- function(zones, fill, fdz_sf, stations, tiles, legend_position
     ggplot2::geom_sf(data = stations, ggplot2::aes(color = status), size = 1.8) +
     ggplot2::geom_sf_text(
       data = units, ggplot2::aes(label = station_id),
-      size = 2.6, vjust = -0.9, color = plot_ink[["primary"]], fontface = "bold"
+      size = 2.6, vjust = -0.9, color = plot_ink[["primary"]], fontface = "bold", family = output_font
     ) +
     fill_scale +
     ggplot2::scale_color_manual(values = map_station_colors, name = "Station", drop = TRUE) +
@@ -680,11 +680,15 @@ leaflet_fdz_map <- function(zones, fill, fdz_sf, stations, title, subtitle) {
     ) |>
     leaflet::addControl(
       htmltools::HTML(sprintf(
-        "<div style='font:13px sans-serif'><b>%s</b><br><span style='color:%s'>%s</span></div>",
+        "<div style='font-size:13px'><b>%s</b><br><span style='color:%s'>%s</span></div>",
         htmltools::htmlEscape(title), plot_ink[["secondary"]], htmltools::htmlEscape(subtitle)
       )),
       position = "topleft"
-    )
+    ) |>
+    # every label, legend and control in the map's font
+    htmlwidgets::prependContent(htmltools::tags$style(sprintf(
+      ".leaflet-container, .leaflet-container * { font-family: '%s', serif; }", output_font
+    )))
 
   if (length(panels) > 1) {
     m <- m |>

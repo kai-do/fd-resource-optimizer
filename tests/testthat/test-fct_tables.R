@@ -70,6 +70,16 @@ test_that("overall_table shows confidence intervals when present", {
   expect_match(body(ft)$s1_ci[body(ft)$metric == "Mean Minutes"], "^\\[.*, .*\\]$")
 })
 
+test_that("overall_table names a future-year range and explains it", {
+  df <- compare_with(compare_overall, ci = TRUE, n_boot = 20)
+  df$resample <- "call"
+  df$predict_years <- 1
+  ft <- overall_table(df)
+
+  expect_true("95% 1-Yr Range" %in% header_text(ft))
+  expect_true(any(grepl("would fall over a single year", ft$footer$dataset[[1]])))
+})
+
 # station_table ---------------------------------------------------------------
 
 test_that("station_table shows one row per station with Baseline / Scenario / Diff", {

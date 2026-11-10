@@ -158,6 +158,12 @@ thresholds <- c(
   10 + 21 / 60 # 10:21, EMS High ERF
 )
 with_ci <- TRUE
+# Intervals on the overall diffs: calls resampled one by one, as the range
+# each diff would fall in over a single future year with the same pattern of
+# calls (predict_years = NULL for a CI of the long-run difference instead).
+# Step 07's scenario-vs-scenario comparison uses the same method.
+ci_resample <- "call"
+ci_predict_years <- 1
 
 # Stats -----------------------------------------------------------------------
 
@@ -183,6 +189,9 @@ comparison <- scenarios |>
     due = due_levels,
     thresholds = thresholds,
     ci = with_ci,
+    n_boot = 2000,
+    resample = ci_resample, # or "zone": whole FDZs
+    predict_years = ci_predict_years,
     seed = 343
   )
 

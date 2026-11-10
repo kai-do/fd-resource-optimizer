@@ -9,9 +9,11 @@
 #                         station workload, and the zones whose responder
 #                         changes
 #
-# And, for the first filter set, tbl_scenario_pairs: the baseline and the top
-# scenarios against each other, with bootstrap intervals, to show whether the
-# top scenarios differ by more than chance.
+# And, for the first filter set, tbl_scenario_pairs: the top scenarios against
+# each other and every other group, with simultaneous bootstrap intervals, to
+# show whether they differ by more than chance; and tbl_dispatch_codes: the calls
+# for every dispatch code the filter set includes, zeros too, under their
+# chief complaints.
 #
 # The top scenarios are the best n_top on rank_by, or the ones you name in
 # top_scenarios. All tables are written as Word tables (.docx) or images
@@ -21,7 +23,10 @@
 #                             compare_fdz.parquet, compare_station.parquet,
 #                             scenarios.parquet, filter_years.parquet,
 #                             paired_calls.parquet  (step 06)
+#                             incident_fdz.parquet  (step 03)
+#         (data_inputs_dir):  <date>_ems_call_mapping.csv
 # Outputs (data_outputs_dir): tables/<filter set>/*.docx or *.png
+#                             compare_pairs.parquet (for step 08's plot)
 #
 # Run from the repo root.
 
@@ -44,6 +49,10 @@ top_scenarios <- NULL
 # Due level to show (step 06's due_levels)
 due_level <- 1
 
+# Fire unit tier whose dispatch codes the dispatch code table lists: the first
+# filter set's ems_capability in step 06
+dispatch_tier <- "PARAMEDIC"
+
 stopifnot(table_format %in% c("docx", "png"))
 
 # Config ----------------------------------------------------------------------
@@ -51,6 +60,7 @@ stopifnot(table_format %in% c("docx", "png"))
 cfg <- config::get(file = "inst/golem-config.yml")
 
 tables_dir <- file.path(cfg$data_outputs_dir, "tables")
+mapping_file <- file.path(cfg$data_inputs_dir, "2026-11-09_ems_call_mapping.csv")
 
 # Read ------------------------------------------------------------------------
 
@@ -108,23 +118,26 @@ scenario_summary_table(
 
 # Scenario vs scenario --------------------------------------------------------
 #
-# The baseline and the top scenarios, every pair against each other (first
-# minus second, in this order). A diff is colored only when its interval
-# excludes 0; otherwise the two can't be told apart on these calls. Step 08
-# plots the same comparison: keep the seed, scenarios and metrics in step.
+# The top scenarios against each other and against every other group, the
+# baseline included (first minus second, a top scenario always first). A diff
+# is colored only when its interval excludes 0; otherwise the two can't be
+# told apart on these calls. Each interval is the range the difference would
+# fall in over a single future year with the same pattern of calls (calls
+# resampled one by one, as step 06's overall intervals). They are
+# simultaneous: per metric, all of them hold together 95% of the time, so the
+# many pairs don't turn up chance differences. Saved as
+# compare_pairs.parquet, which step 08 plots.
 # Metrics: mean_minutes (ranks like total_minutes), median_minutes,
 # p90_minutes, mean_distance_m, pct_within_<threshold>.
 
-pair_scenarios <- c(
-  baseline_name,
-  top_scenarios %||%
-    utils::head(rank_scenarios(cmp_overall, by = rank_by, filter_name = first_filter, due = due_level), n_top)
-)
+pair_top <- top_scenarios %||%
+  utils::head(rank_scenarios(cmp_overall, by = rank_by, filter_name = first_filter, due = due_level), n_top)
 
 set.seed(343)
 cmp_pairs <- compare_scenarios(
   paired,
-  scenario = pair_scenarios, # names or ids, baseline included
+  scenario = pair_top, # names or ids
+  against = c(baseline_name, unique(paired$scenario_name)), # NULL = only pairs within scenario
   metrics = c(
     "mean_minutes",
     "p90_minutes",
@@ -134,9 +147,14 @@ cmp_pairs <- compare_scenarios(
   filter_name = first_filter,
   due = due_level,
   baseline_name = baseline_name,
-  n_boot = 1000,
-  level = 0.95
+  n_boot = 5000, # simultaneous intervals sit far in the tails: thousands of resamples
+  level = 0.95,
+  simultaneous = TRUE, # FALSE = each pair's own 95% interval
+  resample = "call", # or "zone": whole FDZs
+  predict_years = 1, # NULL = CIs of the long-run differences
+  data_years = years # how many years each filter set's calls cover
 )
+arrow::write_parquet(cmp_pairs, file.path(cfg$data_outputs_dir, "compare_pairs.parquet"))
 
 scenario_pairs_table(
   cmp_pairs,
@@ -146,6 +164,39 @@ scenario_pairs_table(
   time_format = "mmss"
 ) |>
   save_table(file.path(tables_dir, "tbl_scenario_pairs.docx"))
+
+# Dispatch codes --------------------------------------------------------------
+#
+# Every code of dispatch_tier in the EMS call mapping, with the first filter
+# set's calls (zeros included) under their chief complaints. Codes,
+# descriptors and CAD codes come from the mapping, saved from Excel as
+# Windows-1252 text.
+
+call_mapping <- read.csv(
+  mapping_file,
+  colClasses = "character", # codes keep their leading zeros (01C05)
+  fileEncoding = "cp1252",
+  check.names = FALSE
+) |>
+  prep_call_mapping()
+
+incident_fdz <- read_output("incident_fdz.parquet")[c("incident_number", "dispatch_code")]
+filter_codes <- incident_fdz[incident_fdz$incident_number %in% paired$dest_id[paired$filter_name == first_filter], ]
+filter_years <- years$years[years$filter_name == first_filter]
+
+dispatch_code_counts(
+  filter_codes,
+  call_mapping,
+  tier = dispatch_tier,
+  years = filter_years
+) |>
+  dispatch_code_table(
+    filter_name = first_filter,
+    title = NULL, # NULL = automatic
+    subtitle = NULL,
+    years = filter_years
+  ) |>
+  save_table(file.path(tables_dir, "tbl_dispatch_codes.docx"))
 
 # Example tables, every argument and metric spelled out ------------------------
 #

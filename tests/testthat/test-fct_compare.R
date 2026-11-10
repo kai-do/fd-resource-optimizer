@@ -152,6 +152,55 @@ test_that("bootstrap medians match quantile() on the resampled calls", {
   expect_equal(ci$ci_lower[ci$metric == "median_minutes"], expected)
 })
 
+test_that("a one-year range is about twice as wide as the CI over three years", {
+  # prediction for a period with a third of the calls: sd sqrt(1/n + 3/n),
+  # twice the CI's sqrt(1/n)
+  set.seed(21)
+  n <- 600
+  both <- data.frame(
+    fdz_id = rep(letters[1:20], length.out = n),
+    dest_id = seq_len(n),
+    baseline_minutes = stats::rnorm(n, 8, 2),
+    scenario_minutes = stats::rnorm(n, 7.5, 2),
+    baseline_distance_m = 1000,
+    scenario_distance_m = 1000
+  )
+  width <- function(share) {
+    ci <- bootstrap_diffs(both, 8, n_boot = 3000, level = 0.9, cluster = both$dest_id, predict_share = share)
+    ci$ci_upper[1] - ci$ci_lower[1]
+  }
+  ratio <- width(1 / 3) / width(NULL)
+
+  expect_gt(ratio, 1.7)
+  expect_lt(ratio, 2.3)
+  expect_equal(sum(resample_weights(30, 1 / 3)), 10) # one year of three: a third of the calls
+})
+
+test_that("interval_text names CIs and future-period ranges", {
+  expect_equal(interval_text(0.95)$short, "95% CI")
+  expect_equal(interval_text(0.95, 1)$short, "95% 1-Yr Range")
+  expect_equal(interval_text(0.95, 1)$phrase, "95% range for a single year")
+  expect_equal(interval_text(0.9, 3)$phrase, "90% range for a 3-year period")
+  expect_error(check_predict(1, "zone"), "resample = \"call\"")
+  expect_error(check_predict(-1, "call"), "positive")
+})
+
+test_that("bootstrap intervals under a seed stay as they were", {
+  # recorded before bootstrap_diffs() was split into weights and draws
+  both <- data.frame(
+    fdz_id = c("a", "a", "b", "c", "c", "c", "d", "d"),
+    baseline_minutes = c(1, 4, 2, 9, 3, 5, 6.5, 8),
+    scenario_minutes = c(2, 6, 2, 9, 7, 5, 4, 8.5),
+    baseline_distance_m = c(100, 400, 200, 900, 300, 500, 650, 800),
+    scenario_distance_m = c(200, 600, 200, 900, 700, 500, 400, 850)
+  )
+  set.seed(7)
+  ci <- bootstrap_diffs(both, thresholds = c(4, 6), n_boot = 200, level = 0.9)
+
+  expect_equal(ci$ci_lower, c(-0.666666666666667, -2.5, -0.0999999999999996, -66.6666666666667, -0.4, -0.222222222222222))
+  expect_equal(ci$ci_upper, c(1.4, 2, 2, 140, 0.333333333333333, 0.333333333333333))
+})
+
 # compare_calls ---------------------------------------------------------------
 
 test_that("compare_calls describes how individual calls change", {

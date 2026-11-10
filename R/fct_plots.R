@@ -327,6 +327,7 @@ travel_time_ecdf <- function(
         angle = 90,
         hjust = 1,
         vjust = -0.4,
+        family = output_font,
         size = 3,
         color = plot_ink[["secondary"]]
       )
@@ -369,6 +370,9 @@ travel_time_ecdf <- function(
 #' @param filter_name,due Filter set and due level to show. `NULL` uses the
 #'   first in `df` (with a message if there are others).
 #' @param title,subtitle Override the automatic title and subtitle.
+#' @param group_first `TRUE` groups the rows by the first scenario: a label
+#'   per group ("A vs") down the left, and each row named only by the second
+#'   scenario.
 #'
 #' @return A ggplot. Times are in minutes, `pct_within` shares in percentage
 #'   points and distances in miles.
@@ -379,7 +383,8 @@ scenario_pairs_plot <- function(
   filter_name = NULL,
   due = NULL,
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  group_first = FALSE
 ) {
   df <- as.data.frame(df)
   filter_name <- pick_one(df$filter_name, filter_name, "filter set")
@@ -395,37 +400,60 @@ scenario_pairs_plot <- function(
   df$lo <- df$ci_lower * unit
   df$hi <- df$ci_upper * unit
 
-  pairs <- unique(paste(df$scenario_a, "vs", df$scenario_b))
-  df$pair <- factor(paste(df$scenario_a, "vs", df$scenario_b), levels = rev(pairs))
+  if (group_first) {
+    groups <- unique(paste(df$scenario_a, "vs"))
+    df$group <- factor(paste(df$scenario_a, "vs"), levels = groups)
+    df$pair <- factor(df$scenario_b, levels = rev(unique(df$scenario_b)))
+  } else {
+    pairs <- unique(paste(df$scenario_a, "vs", df$scenario_b))
+    df$pair <- factor(paste(df$scenario_a, "vs", df$scenario_b), levels = rev(pairs))
+  }
   df$facet <- factor(pair_strip_label(df$metric), levels = pair_strip_label(metrics))
+  panels <- if (group_first) {
+    # one row of panels per group, each only as tall as its pairs, the group
+    # label left of the scenario names
+    ggplot2::facet_grid(
+      rows = ggplot2::vars(group), cols = ggplot2::vars(facet),
+      scales = "free", space = "free_y", switch = "y"
+    )
+  } else {
+    ggplot2::facet_wrap(ggplot2::vars(facet), nrow = 1, scales = "free_x")
+  }
 
-  ci_text <- paste0(round(df$level[1] * 100), "% CI")
-  verdicts <- c("Clear difference", paste0("Within noise (", ci_text, " crosses 0)"))
+  ci <- pairs_ci_text(df)
+  verdicts <- c("Clear difference", paste0("Within noise (", ci$label, " crosses 0)"))
   df$verdict <- factor(ifelse(df$ci_excludes_zero, verdicts[1], verdicts[2]), levels = verdicts)
 
   if (is.null(title)) {
     title <- "Scenario vs Scenario"
   }
   if (is.null(subtitle)) {
-    subtitle <- paste(filter_name, paste(due_ordinal(due), "Due"), paste(ci_text, "from resampling whole FDZs"), sep = " · ")
+    # the interval description on its own line: it can be long
+    subtitle <- paste0(paste(filter_name, paste(due_ordinal(due), "Due"), sep = " · "), "\n", ci$source)
   }
 
   ggplot2::ggplot(df, ggplot2::aes(y = pair)) +
     ggplot2::geom_vline(xintercept = 0, color = plot_ink[["secondary"]], linewidth = 0.4) +
     ggplot2::geom_linerange(ggplot2::aes(xmin = lo, xmax = hi, color = verdict), linewidth = 0.7, na.rm = TRUE) +
     ggplot2::geom_point(ggplot2::aes(x = x, color = verdict, shape = verdict), size = 2.6, stroke = 0.9, fill = "white") +
-    ggplot2::facet_wrap(ggplot2::vars(facet), nrow = 1, scales = "free_x") +
+    panels +
     ggplot2::expand_limits(x = 0) +
     ggplot2::scale_x_continuous(labels = signed_labels) +
     ggplot2::scale_color_manual(
       values = stats::setNames(c(plot_colors[1], plot_ink[["muted"]]), verdicts),
-      drop = FALSE,
+      drop = TRUE, # only the outcomes drawn: an absent one would have an empty key
       name = NULL
     ) +
-    ggplot2::scale_shape_manual(values = stats::setNames(c(19, 21), verdicts), drop = FALSE, name = NULL) +
+    ggplot2::scale_shape_manual(values = stats::setNames(c(19, 21), verdicts), drop = TRUE, name = NULL) +
     ggplot2::labs(title = title, subtitle = subtitle, x = "Difference, First Minus Second", y = NULL) +
     plot_theme(horizontal = TRUE, legend = TRUE) +
-    ggplot2::theme(panel.spacing.x = ggplot2::unit(1.5, "lines"))
+    ggplot2::theme(
+      panel.spacing.x = ggplot2::unit(1.5, "lines"),
+      panel.spacing.y = ggplot2::unit(0.8, "lines"),
+      strip.text.y.left = ggplot2::element_text(
+        angle = 0, hjust = 1, face = "bold", color = plot_ink[["primary"]]
+      )
+    )
 }
 
 #' Save a plot to an image file
@@ -452,6 +480,8 @@ save_plot <- function(p, path, width = 8, height = 6) {
 plot_colors <- c("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
 plot_baseline_color <- "#a3a29b"
 plot_ink <- c(primary = "#0b0b0b", secondary = "#52514e", muted = "#898781", grid = "#e1e0d9")
+# One font for every output: plots, maps, tables and the workbook
+output_font <- "Times New Roman"
 
 # The groups to plot as names, in order: scenario names or ids, and the
 # baseline's name. NULL = baseline, then every scenario in df.
@@ -562,6 +592,51 @@ pair_strip_label <- function(metric) {
   paste0(label, "\n", better, " = first better")
 }
 
+# How a compare_scenarios() result's intervals are described: `label` ("95%
+# CI", "95% range for a single year", "95% simultaneous CI"), `column` (a
+# table header), `source` (where they come from) and `meaning` (for
+# simultaneous ones, what holds together)
+pairs_ci_text <- function(df) {
+  pct <- function(x) paste0(signif(100 * x, 3), "%")
+  joint <- pct(df$level[1])
+  by_call <- "resample" %in% names(df) && df$resample[1] == "call"
+  od <- if ("overdispersion" %in% names(df)) df$overdispersion[1] else 1
+  pred <- if ("predict_years" %in% names(df)) df$predict_years[1] else NA
+  resampled <- paste0(
+    if (by_call) "calls resampled" else "FDZs resampled",
+    if (od > 1) sprintf(", widened ×%.2f for year-to-year swings in zone demand", sqrt(od))
+  )
+  # a CI of the long-run difference, or a range for a future period
+  kind <- interval_text(df$level[1], pred)
+  noun <- if (is.na(pred)) "CI" else "range"
+  span <- if (is.na(pred)) "" else sub("^.*range", "", kind$phrase) # " for a single year"
+  if (!"ci_type" %in% names(df) || df$ci_type[1] != "simultaneous") {
+    return(list(
+      label = kind$phrase,
+      column = kind$short,
+      source = if (by_call || od > 1 || !is.na(pred)) paste0(kind$phrase, ", ", resampled) else paste(joint, "CI from resampling whole FDZs"),
+      meaning = NULL
+    ))
+  }
+  each <- df$per_interval_level[!is.na(df$per_interval_level)]
+  each <- if (length(each) == 0) {
+    ""
+  } else if (pct(min(each)) == pct(max(each))) {
+    pct(min(each))
+  } else {
+    paste0(pct(min(each)), "–", pct(max(each)))
+  }
+  list(
+    label = paste(joint, "simultaneous", noun),
+    column = sub(" ", " Sim. ", kind$short, fixed = TRUE), # "95% Sim. CI"
+    source = paste0(joint, " simultaneous ", noun, "s", span, " per metric (each ", each, " alone), ", resampled),
+    meaning = paste0(
+      "Simultaneous: per metric, all ", max(df$n_comparisons), " ", noun, "s hold together ", joint,
+      " of the time; on its own each is a ", each, " ", noun, "."
+    )
+  )
+}
+
 # Axis labels with a sign on gains: -0.5, 0, +0.5
 signed_labels <- function(x) {
   out <- format(x, trim = TRUE, drop0trailing = TRUE)
@@ -584,7 +659,7 @@ minutes_axis_title <- function(time_format) {
 # Minimal theme: quiet gridlines along the minutes axis only, legend below
 plot_theme <- function(horizontal, legend) {
   category_grid <- if (horizontal) "panel.grid.major.y" else "panel.grid.major.x"
-  theme <- ggplot2::theme_minimal(base_size = 11) +
+  theme <- ggplot2::theme_minimal(base_size = 11, base_family = output_font) +
     ggplot2::theme(
       plot.title.position = "plot",
       plot.title = ggplot2::element_text(color = plot_ink[["primary"]], face = "bold"),
