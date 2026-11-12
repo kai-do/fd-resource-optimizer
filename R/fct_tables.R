@@ -528,6 +528,70 @@ scenario_pairs_table <- function(
   )
 }
 
+#' P-median solutions table: where the optimizer would put the units
+#'
+#' One row per solution from step 10: the stations it adds to the fixed set,
+#' the current units that would move and where to, and its total travel
+#' minutes against today's placement. These are the optimizer's own numbers
+#' (each zone served by its cheapest open station), not run card scoring.
+#'
+#' @param solutions Step 10's `p_median_solutions.parquet`: `rank`,
+#'   `objective`, `added_stations`, `move_from`, `move_to`,
+#'   `diff_from_current`, `pct_diff_from_current`.
+#' @param years Years of calls behind the totals: minutes are shown per year.
+#'   `NULL` shows the totals as they are.
+#' @param title,subtitle Table title and subtitle.
+#'
+#' @return A flextable.
+#' @noRd
+p_median_solutions_table <- function(
+  solutions,
+  years = NULL,
+  title = "Optimized ALS Engine Placements",
+  subtitle = "Best station sets around the fixed rescues, against today's engines"
+) {
+  stations <- function(x) vapply(x, \(s) paste(sort(unlist(s)), collapse = ", "), character(1))
+  per_year <- if (is.null(years)) 1 else years
+  minutes <- function(x) formatC(x / per_year, format = "f", digits = 0, big.mark = ",")
+
+  body <- data.frame(
+    rank = paste0("#", solutions$rank),
+    added = stations(solutions$added_stations),
+    move_from = stations(solutions$move_from),
+    move_to = stations(solutions$move_to),
+    total = minutes(solutions$objective),
+    diff = minutes(solutions$diff_from_current),
+    pct = sprintf("%+.1f%%", solutions$pct_diff_from_current)
+  )
+  colors <- data.frame(
+    rank = NA_character_, added = NA_character_, move_from = NA_character_,
+    move_to = NA_character_, total = NA_character_,
+    diff = diff_colors(solutions$diff_from_current, rep("total_minutes", nrow(body))),
+    pct = diff_colors(solutions$diff_from_current, rep("total_minutes", nrow(body)))
+  )
+
+  build_table(
+    body,
+    labels = c(
+      "Solution", "Engine Stations", "Moved From", "Moved To",
+      if (is.null(years)) "Total Minutes" else "Total Minutes / Year",
+      "Diff", "% Diff"
+    ),
+    groups = c(NA, NA, "Change From Today", "Change From Today", NA, "vs Today", "vs Today"),
+    colors = colors,
+    n_keys = 1,
+    title = title,
+    subtitle = subtitle,
+    note = paste(
+      "Modeled OSRM drive time; weighted p-median, each zone served by its",
+      "cheapest open station (not run card order). Diff = solution minus today's engines."
+    ),
+    notes = if (!is.null(years)) {
+      paste0("Minutes are yearly averages over ", sprintf("%.1f", years), " years.")
+    }
+  )
+}
+
 #' Save a table to Word or PNG
 #'
 #' @param ft A flextable.

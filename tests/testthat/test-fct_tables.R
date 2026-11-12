@@ -352,3 +352,39 @@ test_that("save_table writes Word and PNG files", {
   expect_true(file.exists(png) && file.size(png) > 0)
   expect_error(save_table(ft, tempfile(fileext = ".pdf")), "docx or .png")
 })
+
+# p_median_solutions_table ----------------------------------------------------
+
+make_solutions_df <- function() {
+  tibble::tibble(
+    rank = 1:2,
+    objective = c(300, 330),
+    added_stations = list(c(7, 4), c(4, 22)),
+    move_from = list(c(1, 2), c(1, 2)),
+    move_to = list(7, 22),
+    diff_from_current = c(-60, -30),
+    pct_diff_from_current = c(-60 / 360 * 100, -30 / 360 * 100)
+  )
+}
+
+test_that("p_median_solutions_table shows one row per solution with stations listed", {
+  ft <- p_median_solutions_table(make_solutions_df())
+  b <- body(ft)
+
+  expect_equal(b$rank, c("#1", "#2"))
+  expect_equal(b$added, c("4, 7", "4, 22"))
+  expect_equal(b$move_from, c("1, 2", "1, 2"))
+  expect_equal(b$move_to, c("7", "22"))
+  expect_equal(b$total, c("300", "330"))
+  expect_equal(b$pct, c("-16.7%", "-8.3%"))
+  expect_match(paste(ft$footer$dataset[[1]], collapse = " "), "cheapest open station")
+})
+
+test_that("p_median_solutions_table shows minutes per year when given years", {
+  ft <- p_median_solutions_table(make_solutions_df(), years = 3)
+  b <- body(ft)
+
+  expect_equal(b$total, c("100", "110"))
+  expect_equal(b$diff, c("-20", "-10"))
+  expect_match(paste(ft$footer$dataset[[1]], collapse = " "), "yearly averages over 3.0 years")
+})
