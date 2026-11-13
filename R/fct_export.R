@@ -1,5 +1,5 @@
 # Excel export of a scenario comparison: the run's settings, scenarios and
-# filter sets, then the four compare_*() tables, in one workbook.
+# filter sets, then the compare_*() tables, in one workbook.
 #
 #   export_comparison(
 #     scenarios, matrix_df, runcard, "scenario_comparison.xlsx",
@@ -8,10 +8,11 @@
 
 #' Write a scenario comparison workbook
 #'
-#' Runs [compare_overall()], [compare_calls()], [compare_by_fdz()] and
-#' [compare_by_station()] on one shared run card assignment (computed once) and
-#' writes them, with the settings, scenarios and filter sets used, to an Excel
-#' file.
+#' Runs [compare_overall()], [compare_calls()], [compare_by_fdz()],
+#' [compare_by_station()] and, when the matrix has each call's territory
+#' `station_id`, [compare_by_territory()] on one shared run card assignment
+#' (computed once) and writes them, with the settings, scenarios and filter
+#' sets used, to an Excel file.
 #'
 #' @inheritParams compare_overall
 #' @inheritParams compare_calls
@@ -20,7 +21,8 @@
 #'   the confidence intervals can be repeated; recorded in the Settings sheet.
 #'
 #' @return Invisibly, a named list of the sheets' data frames: Settings,
-#'   Scenarios, Filter Sets, Overall, Calls, By FDZ, By Station. Its
+#'   Scenarios, Filter Sets, Overall, Calls, By FDZ, By Station (and By
+#'   Territory when the matrix has `station_id`). Its
 #'   `"paired"` attribute holds the call-level [paired_calls()] table the
 #'   comparisons were built from (not written to the workbook), for
 #'   [travel_time_boxplot()].
@@ -62,6 +64,9 @@ export_comparison <- function(
     "By FDZ" = compare_by_fdz_paired(paired, thresholds),
     "By Station" = compare_by_station_paired(paired)
   )
+  if ("station_id" %in% names(paired)) {
+    sheets[["By Territory"]] <- compare_by_territory_paired(paired, thresholds)
+  }
 
   write_workbook(sheets, file)
   attr(sheets, "paired") <- paired

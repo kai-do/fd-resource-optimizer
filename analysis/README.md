@@ -17,3 +17,31 @@ Excluded from the package build (`.Rbuildignore`). Not package code: no function
 - **SQL extracts** that feed the pipeline go in `analysis/sql/`. They run by hand on the agency network, and their CSV output is saved to `data_inputs_dir` with a date prefix (`YYYY-MM-DD_<name>.csv`).
 
 If the pipeline grows, `targets` is a candidate for orchestrating these steps; see the refactor notes in the top-level README.
+
+## Steps
+
+Data steps are slow and write the results the output steps read. Output steps only read those results and write tables, plots and maps in seconds, so rerun them freely after changing a setting.
+
+| Step | Script | Kind | Main outputs |
+|---|---|---|---|
+| 00–02 | OSRM setup, server start, `02-generate_travel_matrix.R` | data (by hand) | `incident_travel_matrix.parquet` |
+| 03 | `03-assign_incident_fdz.R` | data | `incident_fdz.parquet` |
+| 04 | `04-attach_fdz_to_matrix.R` | data | `incident_travel_matrix_fdz.parquet` |
+| 05 | `05-get_travel_stats.R` | data | `travel_stats.parquet` |
+| 06 | `06-get_runcard_stats.R` | data | `compare_*.parquet`, `paired_calls.parquet`, `scenarios.parquet`, `filter_years.parquet`, `scenario_comparison.xlsx` |
+| 07 | `07-compare_scenario_pairs.R` | data (~20 min) | `compare_pairs.parquet` |
+| 08 | `08-optimize_p_median.R` | data | `p_median_solutions.parquet` |
+| 09 | `09-score_als_placements.R` | data | `als/compare_*.parquet`, `als/scenarios.parquet`, `als/filter_years.parquet`, `als/als_scenario_comparison.xlsx` |
+| 10 | `10-make_tables.R` | output | `tables/*.docx` |
+| 11 | `11-make_plots.R` | output | `plots/*.png` |
+| 12 | `12-make_maps.R` | output | `maps/*.png`, `maps/*.html` |
+| 13 | `13-make_als_tables.R` | output | `tables/als/*.docx` |
+
+Run them with `analysis/run_all.R`, from the repo root:
+
+```r
+stage <- "outputs" # or "data", or "all" (the default)
+source("analysis/run_all.R")
+```
+
+or `Rscript analysis/run_all.R outputs`. Set `steps <- c(10, 13)` instead to run particular steps.

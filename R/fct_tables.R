@@ -246,11 +246,53 @@ station_table <- function(
   )
 }
 
-#' Scenario summary table: every scenario's change from the baseline
+#' Station territory comparison table
+#'
+#' Coverage of each station's territory (the calls in its zones, whoever
+#' responds), not the station's workload: see [station_table()] for that.
+#'
+#' @inheritParams overall_table
+#' @inheritParams fdz_table
+#' @param df Output of [compare_by_territory()].
+#' @param metrics Metric(s) to show; several only with one scenario. Default
+#'   `"p90_minutes"`.
+#'
+#' @return A flextable: one row per territory with Baseline / Scenario / Diff
+#'   for each metric, diffs colored green when better and red when worse.
+#' @noRd
+territory_table <- function(
+  df,
+  scenario = NULL,
+  filter_name = NULL,
+  due = NULL,
+  metrics = "p90_minutes",
+  baseline_name = "Baseline",
+  title = NULL,
+  subtitle = NULL,
+  pct_total = FALSE,
+  time_format = c("decimal", "mmss"),
+  digits = 2
+) {
+  rows_table(
+    df, key = "station_id", key_label = "Territory",
+    scenario, filter_name, due, metrics, baseline_name,
+    title_prefix = "Station Territory Comparison",
+    neutral = FALSE,
+    responders = FALSE,
+    title = title, subtitle = subtitle,
+    pct_total = pct_total,
+    time_format = match.arg(time_format),
+    digits = digits
+  )
+}
+
+#' Scenario summary table: every scenario's values and change from the baseline
 #'
 #' One row per scenario, one column per metric, so the options can be ranked
 #' side by side. The first row holds the baseline's own values; the others,
-#' each scenario minus the baseline. The best scenario in each column is bold.
+#' each scenario's value with its change from the baseline in parentheses,
+#' e.g. `7:30 (+0:12)`; only the change is colored. The best scenario in each
+#' column is bold.
 #'
 #' @param overall_df Output of [compare_overall()] (or [annualize_counts()] of
 #'   it).
@@ -309,16 +351,22 @@ scenario_summary_table <- function(
   }
 
   # One entry per column: label, the baseline row's text, and per scenario the
-  # number (for sorting and best), its text and its color
+  # number (for sorting and best), its text and its color. Overall metrics
+  # also keep their parts (value, diff, diff color), so only the diff in
+  # parentheses is colored
   columns <- list()
   for (m in metrics) {
+    v <- vapply(scen, function(sc) value_of(sel$df, sc, m, "scenario"), numeric(1))
     d <- vapply(scen, function(sc) value_of(sel$df, sc, m, "diff"), numeric(1))
+    value_text <- fmt(v, m)
+    diff_text <- fmt(d, m, diff = TRUE)
     columns[[m]] <- list(
       label = metric_label(m, sel$years),
       base = fmt(value_of(sel$df, scen[1], m, "baseline"), m),
       num = d,
-      text = fmt(d, m, diff = TRUE),
-      color = diff_colors(d, m)
+      text = ifelse(value_text == "" | diff_text == "", value_text, paste0(value_text, " (", diff_text, ")")),
+      color = rep(NA_character_, length(d)),
+      parts = list(value = value_text, diff = diff_text, color = diff_colors(d, m))
     )
   }
 
@@ -403,16 +451,16 @@ scenario_summary_table <- function(
     n_keys = 1,
     title = title %||% "Scenario Summary",
     subtitle = subtitle %||% paste(
-      sel$filter_name, paste(due_ordinal(sel$due), "Due"), paste("Change From", baseline_name),
+      sel$filter_name, paste(due_ordinal(sel$due), "Due"), paste("vs", baseline_name),
       sep = " · "
     ),
     years = sel$years,
     notes = paste0(
-      "First row: baseline values; other rows: change from baseline",
+      "First row: baseline values; other rows: scenario values, change from baseline in parentheses",
       if (!is.null(calls_df) || !is.null(station_df)) {
         paste0(
           " (", paste(c(if (!is.null(calls_df)) "call-level", if (!is.null(station_df)) "busiest station"), collapse = " and "),
-          " columns are scenario values)"
+          " columns: scenario values only)"
         )
       },
       ". Bold: best scenario in each column."
@@ -425,6 +473,25 @@ scenario_summary_table <- function(
   ft <- flextable::hline(ft, i = 1, border = officer::fp_border(color = "#BBBBBB"), part = "body")
   for (key in names(best_cells)) {
     ft <- flextable::bold(ft, i = best_cells[[key]], j = key, part = "body")
+  }
+
+  # color only the change in parentheses, not the value
+  for (key in names(columns)) {
+    parts <- columns[[key]]$parts
+    if (is.null(parts)) next
+    for (r in seq_along(order_rows)) {
+      k <- order_rows[r]
+      if (is.na(parts$color[k]) || parts$value[k] == "" || parts$diff[k] == "") next
+      ft <- flextable::compose(
+        ft,
+        i = r + 1, # + 1 for the baseline row
+        j = key,
+        part = "body",
+        value = flextable::as_paragraph(
+          parts$value[k], " (", flextable::colorize(parts$diff[k], color = parts$color[k]), ")"
+        )
+      )
+    }
   }
   ft
 }
@@ -530,12 +597,12 @@ scenario_pairs_table <- function(
 
 #' P-median solutions table: where the optimizer would put the units
 #'
-#' One row per solution from step 10: the stations it adds to the fixed set,
+#' One row per solution from step 08: the stations it adds to the fixed set,
 #' the current units that would move and where to, and its total travel
 #' minutes against today's placement. These are the optimizer's own numbers
 #' (each zone served by its cheapest open station), not run card scoring.
 #'
-#' @param solutions Step 10's `p_median_solutions.parquet`: `rank`,
+#' @param solutions Step 08's `p_median_solutions.parquet`: `rank`,
 #'   `objective`, `added_stations`, `move_from`, `move_to`,
 #'   `diff_from_current`, `pct_diff_from_current`.
 #' @param years Years of calls behind the totals: minutes are shown per year.

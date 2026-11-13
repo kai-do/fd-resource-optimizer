@@ -1,4 +1,4 @@
-# 08 - Travel-time box plots for the analysis
+# 11 - Travel-time box plots for the analysis (output step, quick: rerun freely)
 #
 # Box plots of modeled travel time for the baseline and the top scenarios:
 #   overall       one box per scenario
@@ -9,12 +9,12 @@
 # scenarios vs the baseline (pairs_baseline.png), and vs each other and the
 # alternatives (pairs_forest.png)
 #
-# The top scenarios are the best n_top on rank_by (as in step 07), or the ones
-# you name in top_scenarios.
+# The top scenarios are the best n_top on rank_by (as in steps 07 and 10), or
+# the ones you name in top_scenarios.
 #
 # Inputs  (data_outputs_dir): paired_calls.parquet, compare_overall.parquet,
 #                             scenarios.parquet  (step 06)
-#                             compare_pairs.parquet  (step 07; run it first)
+#                             compare_pairs.parquet  (step 07)
 # Outputs (data_outputs_dir): plots/*.png
 #
 # Run from the repo root.
@@ -173,7 +173,11 @@ scenario_pairs_plot(
   title = "Top Scenarios vs Baseline",
   subtitle = NULL
 ) |>
-  save_plot(file.path(plots_dir, "pairs_baseline.png"), width = 10, height = 2.2 + 0.45 * n_pairs(cmp_pairs[vs_baseline, ]))
+  save_plot(
+    file.path(plots_dir, "pairs_baseline.png"),
+    width = 10,
+    height = 2.2 + 0.45 * n_pairs(cmp_pairs[vs_baseline, ])
+  )
 
 scenario_pairs_plot(
   cmp_pairs[!vs_baseline, ],
@@ -182,6 +186,10 @@ scenario_pairs_plot(
   subtitle = NULL,
   group_first = TRUE # a block per top scenario
 ) |>
-  save_plot(file.path(plots_dir, "pairs_forest.png"), width = 10, height = 2.6 + 0.4 * n_pairs(cmp_pairs[!vs_baseline, ]))
+  save_plot(
+    file.path(plots_dir, "pairs_forest.png"),
+    width = 10,
+    height = 2.6 + 0.4 * n_pairs(cmp_pairs[!vs_baseline, ])
+  )
 
 message("Plots written to ", plots_dir)

@@ -1,4 +1,4 @@
-# 10 - Weighted p-median: where to add units around a fixed set
+# 08 - Weighted p-median: where to add units around a fixed set (data step)
 #
 # Keeps fixed_stations open (e.g. the chosen rescue placement) and picks the
 # n_add other stations that minimize total travel time for the filter set's
@@ -6,11 +6,9 @@
 # engine placements once the rescues are settled.
 #
 # This is the plain p-median: no run card order and every unit always
-# available. It proposes station sets; score them like any other scenario by
-# pasting a solution's open_stations into step 06's scenarios tribble and
-# rerunning steps 06-09.
-#
-# Not part of run_all.R (steps 03-09); run it on its own.
+# available. It proposes station sets; step 09 scores them on the run card
+# against today's ALS engines. Or score them like any other scenario by pasting a solution's open_stations into
+# step 06's scenarios tribble and rerunning steps 06-12.
 #
 # Inputs  (data_outputs_dir): incident_travel_matrix_fdz.parquet  (step 04)
 # Outputs (data_outputs_dir): p_median_solutions.parquet

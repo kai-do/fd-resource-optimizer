@@ -1,4 +1,4 @@
-# 06 - Run card travel stats by scenario and filter set
+# 06 - Run card travel stats by scenario and filter set (data step, slow)
 #
 # Each scenario is a set of open stations; each filter set
 # (incident_filter()) says which calls count. Every scenario runs under every
@@ -18,9 +18,12 @@
 #                             One row per filter set, scenario, due level and
 #                             zone.
 #                             compare_overall.parquet, compare_calls.parquet,
-#                             compare_fdz.parquet, compare_station.parquet
+#                             compare_fdz.parquet, compare_station.parquet,
+#                             compare_territory.parquet
 #                             Each scenario minus the baseline scenario, one
 #                             row per metric (see R/fct_compare.R).
+#                             compare_territory groups calls by the territory
+#                             they are in, whoever responds.
 #                             scenario_comparison.xlsx
 #                             The same comparisons in one workbook, with the
 #                             settings, scenarios and filter sets used.
@@ -29,12 +32,13 @@
 #                             the baseline), call and due level: the call's
 #                             zone, territory station, and its responder and
 #                             minutes in the baseline and the scenario. For
-#                             the travel-time plots (step 08).
+#                             the scenario pairs (step 07) and the
+#                             travel-time plots (step 11).
 #                             scenarios.parquet
 #                             The scenarios: id, name, stations, baseline.
 #                             filter_years.parquet
 #                             Dates and years each filter set covers, for
-#                             yearly averages (step 07).
+#                             yearly averages (steps 07 and 10-12).
 #
 # Run from the repo root.
 
@@ -177,7 +181,7 @@ stats_fdz <- scenarios |>
 
 # Comparisons -----------------------------------------------------------------
 
-# One run card assignment shared by all four comparisons, written to Excel with
+# One run card assignment shared by all the comparisons, written to Excel with
 # the settings, scenarios and filter sets; the returned sheets are also saved
 # as parquet below
 comparison <- scenarios |>
@@ -233,7 +237,8 @@ compare_files <- c(
   "Overall" = "compare_overall.parquet",
   "Calls" = "compare_calls.parquet",
   "By FDZ" = "compare_fdz.parquet",
-  "By Station" = "compare_station.parquet"
+  "By Station" = "compare_station.parquet",
+  "By Territory" = "compare_territory.parquet"
 )
 for (sheet in names(compare_files)) {
   arrow::write_parquet(
@@ -243,15 +248,16 @@ for (sheet in names(compare_files)) {
   )
 }
 
-# The call-level times behind the comparisons, for the box plots in step 08
+# The call-level times behind the comparisons, for the scenario pairs (step
+# 07) and the box plots (step 11)
 arrow::write_parquet(
   attr(comparison, "paired"),
   file.path(cfg$data_outputs_dir, "paired_calls.parquet"),
   compression = "zstd"
 )
 
-# The scenarios (step 07 takes the baseline's name from them) and the years
-# each filter set covers, for yearly averages in step 07: a filter set's
+# The scenarios (steps 07 and 10-12 take the baseline's name from them) and
+# the years each filter set covers, for yearly averages in step 10: a filter set's
 # date_range, or the data's first to last date if it has none
 arrow::write_parquet(scenarios, scenarios_output_file, compression = "zstd")
 

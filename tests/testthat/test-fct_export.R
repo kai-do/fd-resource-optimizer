@@ -17,10 +17,10 @@ export_to_temp <- function(...) {
 
 read_sheet <- function(file, sheet) openxlsx::read.xlsx(file, sheet = sheet)
 
-test_that("the workbook has the seven sheets in order", {
+test_that("the workbook has the eight sheets in order", {
   out <- export_to_temp()
 
-  expected <- c("Settings", "Scenarios", "Filter Sets", "Overall", "Calls", "By FDZ", "By Station")
+  expected <- c("Settings", "Scenarios", "Filter Sets", "Overall", "Calls", "By FDZ", "By Station", "By Territory")
   expect_equal(openxlsx::getSheetNames(out$file), expected)
   expect_named(out$sheets, expected)
 })
@@ -41,7 +41,8 @@ test_that("the comparison sheets hold the compare_*() results", {
     "Overall" = do.call(compare_overall, c(args, thresholds = 4)),
     "Calls" = do.call(compare_calls, c(args, slower_by = 2)),
     "By FDZ" = do.call(compare_by_fdz, c(args, thresholds = 4)),
-    "By Station" = do.call(compare_by_station, args)
+    "By Station" = do.call(compare_by_station, args),
+    "By Territory" = do.call(compare_by_territory, c(args, thresholds = 4))
   )
 
   for (sheet in names(direct)) {
@@ -52,6 +53,16 @@ test_that("the comparison sheets hold the compare_*() results", {
       info = sheet
     )
   }
+})
+
+test_that("a matrix without territory stations has no By Territory sheet", {
+  file <- tempfile(fileext = ".xlsx")
+  matrix_df <- make_scenario_matrix_df()
+  matrix_df$station_id <- NULL
+  sheets <- suppressMessages(export_comparison(make_scenarios(), matrix_df, runcard(), file))
+
+  expect_false("By Territory" %in% names(sheets))
+  expect_false("By Territory" %in% openxlsx::getSheetNames(file))
 })
 
 test_that("the Scenarios sheet lists each scenario and marks the baseline", {

@@ -9,6 +9,7 @@
 #   scenarios |> compare_calls(matrix_df, runcard)
 #   scenarios |> compare_by_fdz(matrix_df, runcard)
 #   scenarios |> compare_by_station(matrix_df, runcard)
+#   scenarios |> compare_by_territory(matrix_df, runcard)
 #
 # Results are long: one row per metric, with baseline, scenario, diff and
 # pct_diff (diff / baseline) columns.
@@ -319,6 +320,91 @@ compare_by_station_paired <- function(paired) {
   metrics <- c("n_incidents", "n_fdz", "total_minutes", "median_minutes", "p90_minutes")
   out <- long_metrics(wide[keys], wide, metrics)
   sort_compare(out, paired, then = c("due", "source_id"), metric_order = metrics)
+}
+
+#' Territory-by-territory comparison of each scenario with the baseline
+#'
+#' Groups calls by where they happened, the territory station (`station_id`,
+#' e.g. Station 1 is every call in zones 1A, 1B, 1C, ...), not by who responds,
+#' so it shows how well each territory is covered. Like [compare_overall()],
+#' the metrics are over the calls served in both the baseline and the scenario,
+#' so both sides cover the same calls; calls served on one side only are
+#' counted as unserved instead. Calls with no territory station are left out.
+#'
+#' @inheritParams compare_overall
+#' @param matrix_df Travel matrix as for [compare_overall()], with a
+#'   `station_id` column holding each call's territory station.
+#'
+#' @return One row per filter set, scenario, due level, territory and metric:
+#'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `station_id`,
+#'   `metric`, `baseline`, `scenario`, `diff`, `pct_diff`. Metrics: those of
+#'   [compare_overall()] (`fdz_p90_over_<t>` counts the territory's zones),
+#'   plus `n_fdz` (the territory's zones with calls) and `unserved_calls`.
+#' @noRd
+compare_by_territory <- function(
+  scenarios,
+  matrix_df,
+  runcard_df,
+  filters = incident_filter("All calls"),
+  due = 1,
+  thresholds = c(4, 8)
+) {
+  if (!"station_id" %in% names(matrix_df)) {
+    stop("matrix_df needs a station_id column with each call's territory station", call. = FALSE)
+  }
+  paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
+  compare_by_territory_paired(paired, thresholds)
+}
+
+# compare_by_territory() from precomputed paired_calls(), so several
+# comparisons can share one (slow) run card assignment
+compare_by_territory_paired <- function(paired, thresholds) {
+  if (!"station_id" %in% names(paired)) {
+    stop(
+      "paired has no station_id column; re-run step 06 to save paired_calls.parquet with it",
+      call. = FALSE
+    )
+  }
+  # subsetting drops the order attributes, so sort_compare() gets `paired`
+  calls <- paired
+  no_territory <- is.na(calls$station_id)
+  if (any(no_territory)) {
+    message(
+      length(unique(calls$dest_id[no_territory])),
+      " calls have no territory station and are left out of the territory comparison"
+    )
+    calls <- calls[!no_territory, ]
+  }
+
+  key <- interaction(
+    calls$filter_name, calls$scenario_id, calls$due, calls$station_id,
+    drop = TRUE, lex.order = TRUE
+  )
+  out <- lapply(split(calls, key), function(g) {
+    both <- g[!is.na(g$baseline_minutes) & !is.na(g$scenario_minutes), ]
+    b <- overall_metrics(both, "baseline", thresholds)
+    s <- overall_metrics(both, "scenario", thresholds)
+    n_fdz <- length(unique(g$fdz_id))
+
+    rows <- rbind(
+      data.frame(metric = names(b), baseline = unname(b), scenario = unname(s)),
+      data.frame(
+        metric = c("n_fdz", "unserved_calls"),
+        baseline = c(n_fdz, sum(is.na(g$baseline_minutes))),
+        scenario = c(n_fdz, sum(is.na(g$scenario_minutes)))
+      )
+    )
+    cbind(
+      g[1, c("filter_name", "scenario_id", "scenario_name", "due", "station_id")],
+      add_diffs(rows),
+      row.names = NULL
+    )
+  })
+
+  out <- dplyr::bind_rows(out)
+  overall <- names(overall_metrics(paired[0, ], "baseline", thresholds))
+  metric_order <- c(overall[1], "n_fdz", overall[-1], "unserved_calls")
+  sort_compare(out, paired, then = c("due", "station_id"), metric_order = metric_order)
 }
 
 # Internals -------------------------------------------------------------------

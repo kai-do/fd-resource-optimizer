@@ -274,6 +274,69 @@ test_that("compare_by_station shows the workload moving between stations", {
   expect_equal(get(7, "total_minutes")$scenario, 21.6)
 })
 
+# compare_by_territory --------------------------------------------------------
+#
+# Territories: I1, I2 (zone 1A) in station 1's, I3 (2B) in 51's, I4 (3C) in 3's
+
+test_that("compare_by_territory groups calls by territory, not responder", {
+  out <- compare_by_territory(make_scenarios(), make_scenario_matrix_df(), runcard(), thresholds = 4)
+  get <- function(territory, metric) out[out$station_id == territory & out$metric == metric, ]
+
+  expect_equal(sort(unique(out$station_id)), c(1L, 3L, 51L))
+  expect_false(7 %in% out$station_id) # station 7 responds but has no territory here
+
+  # station 1 closes, but its territory keeps its 2 calls, now served by 7
+  expect_equal(get(1, "n_calls")$baseline, 2)
+  expect_equal(get(1, "n_calls")$scenario, 2)
+  expect_equal(get(1, "n_fdz")$scenario, 1)
+  expect_equal(get(1, "mean_minutes")$baseline, 1.15)
+  expect_equal(get(1, "mean_minutes")$diff, 6)
+  expect_equal(get(1, "pct_within_4min")$diff, -1)
+  expect_equal(get(1, "fdz_p90_over_4min")$scenario, 1)
+  expect_equal(get(3, "mean_minutes")$diff, 0)
+  expect_equal(get(51, "total_minutes")$baseline, 7.3)
+})
+
+test_that("territory metrics match overall_metrics() on the territory's calls", {
+  out <- compare_by_territory(make_scenarios(), make_scenario_matrix_df(), runcard(), thresholds = 4)
+  paired <- suppressMessages(paired_calls(make_scenarios(), make_scenario_matrix_df(), runcard(), incident_filter("All calls"), 1))
+  expected <- overall_metrics(paired[paired$station_id == 1, ], "scenario", 4)
+  territory_1 <- out[out$station_id == 1 & out$metric %in% names(expected), ]
+
+  expect_equal(territory_1$scenario, unname(expected[territory_1$metric]))
+})
+
+test_that("compare_by_territory counts unserved calls apart from the paired metrics", {
+  scenarios <- tibble::tribble(
+    ~scenario_id, ~scenario_name, ~stations, ~baseline,
+    1, "All", c(1, 3, 7, 22), TRUE,
+    2, "Only 22", 22, FALSE
+  )
+
+  out <- suppressMessages(compare_by_territory(scenarios, make_scenario_matrix_df(), runcard()))
+  get <- function(metric) out[out$station_id == 51 & out$metric == metric, ]
+
+  # 2B has no responder with only station 22 open
+  expect_equal(get("unserved_calls")$scenario, 1)
+  expect_equal(get("unserved_calls")$baseline, 0)
+  expect_equal(get("n_calls")$scenario, 0)
+  expect_true(is.na(get("mean_minutes")$scenario))
+})
+
+test_that("compare_by_territory leaves out calls with no territory, and needs station_id", {
+  matrix_df <- make_scenario_matrix_df()
+  matrix_df$station_id[matrix_df$dest_id == "I4"] <- NA
+
+  expect_message(
+    out <- compare_by_territory(make_scenarios(), matrix_df, runcard()),
+    "1 calls have no territory station"
+  )
+  expect_false(3 %in% out$station_id)
+
+  matrix_df$station_id <- NULL
+  expect_error(compare_by_territory(make_scenarios(), matrix_df, runcard()), "station_id")
+})
+
 # Baseline checks -------------------------------------------------------------
 
 test_that("the scenarios need exactly one baseline", {

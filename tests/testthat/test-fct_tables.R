@@ -175,6 +175,31 @@ test_that("a narrow table is widened to fit its title", {
   expect_gte(sum(dim(ft)$widths), nchar(strrep("Long Title ", 6)) * 0.13 - 1e-6)
 })
 
+# territory_table -------------------------------------------------------------
+
+test_that("territory_table shows one row per territory, colored better or worse", {
+  ft <- territory_table(compare_with(compare_by_territory))
+  b <- body(ft)
+
+  # territories, not responders: station 7 responds but has no territory
+  expect_equal(b$station_id, c("1", "3", "51"))
+  expect_equal(b$p90_minutes_d[b$station_id == "1"], "+6.00")
+  expect_true("Territory" %in% header_text(ft))
+  expect_match(header_text(ft)[1], "Station Territory Comparison")
+
+  colors <- ft$body$styles$text$color$data[, "p90_minutes_d"]
+  expect_equal(unname(colors[b$station_id == "1"]), "#B00020")
+})
+
+test_that("territory_table takes several metrics or several scenarios", {
+  ft <- territory_table(compare_with(compare_by_territory), metrics = c("n_calls", "p90_minutes"), pct_total = TRUE)
+  expect_true(all(c("n_calls_bp", "p90_minutes_d") %in% names(body(ft))))
+  expect_equal(body(ft)$n_calls_d, c("0", "0", "0"))
+
+  ft <- territory_table(compare_with(compare_by_territory), scenario = c("No 1", "No 3"))
+  expect_true(all(c("s1_d", "s2_d") %in% names(body(ft))))
+})
+
 # scenario_summary_table -------------------------------------------------------
 
 footer_text <- function(ft) {
@@ -182,18 +207,35 @@ footer_text <- function(ft) {
   paste(chunks$txt[chunks$.part == "footer"], collapse = " ")
 }
 
-test_that("the summary has the baseline's values, then each scenario's diffs", {
+test_that("the summary has the baseline's values, then each scenario's value and diff", {
   cmp <- compare_with(compare_overall, thresholds = 4)
   ft <- scenario_summary_table(cmp, baseline_name = "Baseline Rescues")
   b <- body(ft)
-  diff_of <- function(sc, m) cmp$diff[cmp$scenario_name == sc & cmp$metric == m]
+  get <- function(sc, m, col) cmp[[col]][cmp$scenario_name == sc & cmp$metric == m]
 
   expect_equal(b$scenario, c("Baseline Rescues", "No 1", "No 3"))
   expect_named(b, c("scenario", "median_minutes", "p90_minutes", "pct_within_4min", "total_minutes"))
   expect_equal(b$total_minutes[1], "13")
-  expect_equal(b$total_minutes[2], "+12")
-  expect_equal(b$total_minutes[3], format_values(diff_of("No 3", "total_minutes"), "total_minutes", diff = TRUE))
-  expect_true("Change From Baseline Rescues" %in% unlist(strsplit(header_text(ft)[2], " · ")))
+  expect_equal(b$total_minutes[2], "25 (+12)") # 7.1 + 7.2 + 7.3 + 3.4, 12 more than the baseline
+  expect_equal(
+    b$total_minutes[3],
+    paste0(
+      format_values(get("No 3", "total_minutes", "scenario"), "total_minutes"),
+      " (", format_values(get("No 3", "total_minutes", "diff"), "total_minutes", diff = TRUE), ")"
+    )
+  )
+  expect_equal(b$pct_within_4min[2], "25.0% (-50.0 pts)")
+  expect_true("vs Baseline Rescues" %in% unlist(strsplit(header_text(ft)[2], " · ")))
+})
+
+test_that("only the diff in parentheses is colored", {
+  ft <- scenario_summary_table(compare_with(compare_overall))
+  chunks <- flextable::information_data_chunk(ft)
+  cell <- chunks[chunks$.part == "body" & chunks$.row_id == 2 & chunks$.col_id == "total_minutes", ]
+
+  expect_equal(paste(cell$txt, collapse = ""), "25 (+12)")
+  expect_equal(cell$color[cell$txt == "+12"], "#B00020") # No 1: 12 minutes more, worse
+  expect_false(identical(cell$color[cell$txt == "25"], "#B00020"))
 })
 
 test_that("sort_by puts the best scenario first", {
@@ -224,14 +266,14 @@ test_that("calls and station columns are added when given", {
   expect_equal(b$calls_slower_by_5min[2], "2") # 1A's two calls are 6 minutes slower
   expect_equal(b$busiest_station[1], "50.0% (1)") # baseline: station 1 takes 2 of 4 calls
   expect_match(b$busiest_station[2], "\\(7\\)$") # No 1: station 7 takes over 1A
-  expect_match(footer_text(ft), "call-level and busiest station columns are scenario values")
+  expect_match(footer_text(ft), "call-level and busiest station columns: scenario values only")
 })
 
 test_that("the footer only mentions the extra columns when they are shown", {
   ft <- scenario_summary_table(compare_with(compare_overall))
 
   expect_no_match(footer_text(ft), "call-level")
-  expect_match(footer_text(ft), "First row: baseline values")
+  expect_match(footer_text(ft), "First row: baseline values; other rows: scenario values, change from baseline in parentheses")
 })
 
 test_that("a subset of scenarios can be shown, and yearly counts are labeled", {

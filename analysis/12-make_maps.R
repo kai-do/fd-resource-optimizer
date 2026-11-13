@@ -1,4 +1,4 @@
-# 09 - FDZ maps for the analysis
+# 12 - FDZ maps for the analysis (output step, quick: rerun freely)
 #
 # Maps of the baseline and the top scenarios, each as a static image (for
 # reports) and an interactive web page (for exploring):
@@ -8,7 +8,7 @@
 #   demand        calls per year per zone (once, not per scenario)
 #   demand_density calls per year per square mile, per zone (once)
 #
-# The top scenarios are the best n_top on rank_by (as in steps 07 and 08), or
+# The top scenarios are the best n_top on rank_by (as in steps 07, 10 and 11), or
 # the ones you name in top_scenarios.
 #
 # Inputs  (data_inputs_dir):  <date>_fdzs.csv, <date>_station_addresses.csv
@@ -56,7 +56,10 @@ legend_position <- "bottom"
 cfg <- config::get(file = "inst/golem-config.yml")
 
 fdz_file <- file.path(cfg$data_inputs_dir, "2026-10-14_fdzs.csv")
-station_file <- file.path(cfg$data_inputs_dir, "2026-10-13_station_addresses.csv")
+station_file <- file.path(
+  cfg$data_inputs_dir,
+  "2026-10-13_station_addresses.csv"
+)
 
 maps_dir <- file.path(cfg$data_outputs_dir, "maps")
 dir.create(maps_dir, recursive = TRUE, showWarnings = FALSE)
@@ -71,7 +74,11 @@ fdz_compare <- read_output("compare_fdz.parquet")
 scenarios <- read_output("scenarios.parquet")
 years <- read_output("filter_years.parquet")
 
-fdz_sf <- data.table::fread(fdz_file, na.strings = "NULL", data.table = FALSE) |>
+fdz_sf <- data.table::fread(
+  fdz_file,
+  na.strings = "NULL",
+  data.table = FALSE
+) |>
   prep_fdz_polygons()
 stations <- data.table::fread(station_file, data.table = FALSE) |>
   prep_stations(keep_dept = "Cobb", exclude_abbrev = "FHQ")
@@ -97,7 +104,11 @@ file_stub <- function(name) gsub("[^A-Za-z0-9]+", "_", name)
 # Save each map as .png and .html
 save_both <- function(make_map, name, width = 8, height = 8) {
   make_map(interactive = FALSE) |>
-    save_map(file.path(maps_dir, paste0(name, ".png")), width = width, height = height)
+    save_map(
+      file.path(maps_dir, paste0(name, ".png")),
+      width = width,
+      height = height
+    )
   make_map(interactive = TRUE) |>
     save_map(file.path(maps_dir, paste0(name, ".html")))
 }
@@ -135,7 +146,10 @@ for (scenario in top) {
   save_both(
     function(interactive) {
       fdz_territory_map(
-        fdz_compare, fdz_sf, stations, scenarios,
+        fdz_compare,
+        fdz_sf,
+        stations,
+        scenarios,
         scenario = scenario,
         filter_name = filter_set,
         due = due_level,
@@ -154,7 +168,10 @@ for (scenario in top) {
     save_both(
       function(interactive) {
         fdz_benchmark_map(
-          fdz_compare, fdz_sf, stations, scenarios,
+          fdz_compare,
+          fdz_sf,
+          stations,
+          scenarios,
           scenario = scenario,
           threshold = benchmarks[[b]],
           filter_name = filter_set,
@@ -175,7 +192,10 @@ for (scenario in top) {
 save_both(
   function(interactive) {
     fdz_demand_map(
-      fdz_compare, fdz_sf, stations, scenarios,
+      fdz_compare,
+      fdz_sf,
+      stations,
+      scenarios,
       scenario = NULL, # or a scenario, to mark its unit moves
       years = years,
       filter_name = filter_set,
@@ -194,7 +214,10 @@ save_both(
 save_both(
   function(interactive) {
     fdz_demand_map(
-      fdz_compare, fdz_sf, stations, scenarios,
+      fdz_compare,
+      fdz_sf,
+      stations,
+      scenarios,
       scenario = NULL,
       years = years,
       density = TRUE,
