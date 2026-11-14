@@ -1,8 +1,8 @@
-# Run the analysis pipeline, steps 03-13, in order
+# Run the analysis pipeline, steps 03-14, in order
 #
 # Data steps (03-09) are slow: they build the zone-matched matrix, score the
 # scenarios on the run card, bootstrap the scenario pairs, run the p-median
-# and score the ALS placements. Output steps (10-13) only read the data steps'
+# and score the ALS placements. Output steps (10-14) only read the data steps'
 # saved results and write tables, plots and maps, in seconds: rerun them
 # freely after changing a table, plot or map setting.
 #
@@ -31,14 +31,18 @@ if (!file.exists("DESCRIPTION") || !dir.exists("analysis")) {
 
 cfg <- config::get(file = "inst/golem-config.yml")
 
-stages <- list(data = 3:9, outputs = 10:13, all = 3:13)
+stages <- list(data = 3:9, outputs = 10:14, all = 3:14)
 
 if (!exists("stage", inherits = FALSE)) {
   args <- commandArgs(trailingOnly = TRUE)
   stage <- if (length(args) > 0) args[1] else "all"
 }
 if (!stage %in% names(stages)) {
-  stop("stage must be one of: ", paste(names(stages), collapse = ", "), call. = FALSE)
+  stop(
+    "stage must be one of: ",
+    paste(names(stages), collapse = ", "),
+    call. = FALSE
+  )
 }
 
 all_steps <- sort(list.files("analysis", pattern = "^[0-9]{2}-.*\\.R$"))

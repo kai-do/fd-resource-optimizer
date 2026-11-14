@@ -202,6 +202,55 @@ test_that("calls can be resampled one by one, simultaneous or not", {
   expect_lte(pair$ci_upper, 6)
 })
 
+# Shared sides and parallel chunks ----------------------------------------------
+
+# compare_scenarios()'s inputs to simultaneous_pairs(): "Only 22" can't serve
+# I3, so its pairs are on 3 calls and the others on 4
+pairs_input <- function() {
+  groups <- c("All", "No 1", "No 3", "Only 22")
+  df <- paired(scenarios_with(22, "Only 22"))
+  pairs <- scenario_pairs(groups)
+  calls <- stats::setNames(lapply(groups, function(g) group_calls(df, g, "All")), groups)
+  list(
+    boths = lapply(pairs, function(p) pair_calls(calls[[p[1]]], calls[[p[2]]])),
+    pairs = pairs,
+    universe = sort(unique(df$dest_id))
+  )
+}
+
+test_that("sharing a scenario's side between pairs gives the same draws", {
+  x <- pairs_input()
+  # a resample can draw none of a 3-call pair's calls; it is left out (message)
+  run <- function(...) {
+    suppressMessages(simultaneous_pairs(
+      x$boths, x$universe, "call", c("mean_minutes", "p90_minutes"), thresholds = 4,
+      n_boot = 200, level = 0.95, groups = x$pairs, ...
+    ))
+  }
+  set.seed(1)
+  shared <- run()
+  set.seed(1)
+  own <- run(cache = FALSE)
+
+  expect_identical(shared, own)
+  expect_equal(vapply(x$boths, nrow, integer(1)), c(4, 4, 3, 4, 3, 3))
+})
+
+test_that("chunked resamples give the same intervals on 1 or 2 cores", {
+  skip_on_cran()
+  run <- function(n_cores) {
+    set.seed(6)
+    compare_of(scenario = c("All", "No 1", "No 3"), resample = "call", simultaneous = TRUE, n_cores = n_cores)
+  }
+  one <- run(1)
+  two <- run(2)
+
+  expect_identical(one$ci_lower, two$ci_lower)
+  expect_identical(one$ci_upper, two$ci_upper)
+  expect_equal(RNGkind()[1], "Mersenne-Twister") # the caller's generator is left as it was
+  expect_error(compare_of(n_cores = 0), "n_cores")
+})
+
 test_that("overdispersion widens every interval about its difference", {
   set.seed(9)
   plain <- compare_of(scenario = c("No 1", "No 3"), resample = "call")

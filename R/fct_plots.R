@@ -456,6 +456,105 @@ scenario_pairs_plot <- function(
     )
 }
 
+#' Move plans: a run card metric after each engine move, one panel per plan
+#'
+#' Each panel is one plan's transition: today's units, then each move in its
+#' order ("1 → 17": the unit at 1 moves to 17), with the metric on the run
+#' card after every move so far. The dashed line is today's value; the label
+#' is the plan's value with every move made. Panels share the metric axis.
+#'
+#' @param steps `steps` rows from [move_order()], for several plans, with a
+#'   `plan` column naming each one. Panels follow the order plans first
+#'   appear in.
+#' @param metric `total_minutes`, `p90_minutes` or a `pct_within_<t>` column.
+#' @param years Years of calls behind the totals: total minutes are shown per
+#'   year. `NULL` shows them as they are.
+#' @param title,subtitle Plot title and subtitle.
+#' @param ncol Panels per row.
+#' @inheritParams travel_time_boxplot
+#'
+#' @return A ggplot.
+#' @noRd
+move_plan_plot <- function(
+  steps,
+  metric = "total_minutes",
+  years = NULL,
+  title = NULL,
+  subtitle = NULL,
+  ncol = 2,
+  time_format = c("decimal", "mmss")
+) {
+  time_format <- match.arg(time_format)
+  steps <- as.data.frame(steps)
+  if (!"plan" %in% names(steps)) {
+    stop("steps needs a plan column naming each plan", call. = FALSE)
+  }
+  if (!metric %in% names(steps)) {
+    stop("Unknown metric: ", metric, call. = FALSE)
+  }
+  plans <- unique(steps$plan)
+  steps <- steps[order(match(steps$plan, plans), steps$step), ]
+  y <- steps[[metric]]
+  if (metric == "total_minutes" && !is.null(years)) y <- y / years
+  if (is_share(metric)) y <- 100 * y
+
+  move <- ifelse(steps$step == 0, "Today", paste(steps$from, "→", steps$station))
+  df <- data.frame(
+    plan = factor(steps$plan, levels = plans),
+    key = paste(steps$plan, steps$step, sep = "\r"),
+    move = move,
+    y = y,
+    last = !duplicated(steps$plan, fromLast = TRUE)
+  )
+  df$key <- factor(df$key, levels = unique(df$key))
+  today <- df[!duplicated(df$plan), c("plan", "y")]
+  labels <- stats::setNames(df$move, as.character(df$key))
+
+  value_text <- function(v) {
+    if (is_share(metric)) {
+      sprintf("%.1f%%", v)
+    } else if (metric == "total_minutes") {
+      formatC(v, format = "f", digits = 0, big.mark = ",")
+    } else if (time_format == "mmss") {
+      vapply(v, format_mmss, character(1))
+    } else {
+      sprintf("%.2f", v)
+    }
+  }
+  y_labels <- if (is_share(metric)) {
+    function(v) paste0(v, "%")
+  } else if (metric == "total_minutes") {
+    function(v) formatC(v, format = "f", digits = 0, big.mark = ",")
+  } else {
+    minutes_axis_labels(time_format)
+  }
+  y_title <- paste0(metric_label(metric), if (metric == "total_minutes" && !is.null(years)) " per Year")
+
+  ggplot2::ggplot(df, ggplot2::aes(x = key, y = y, group = plan)) +
+    ggplot2::geom_hline(
+      data = today, ggplot2::aes(yintercept = y),
+      color = plot_baseline_color, linetype = "dashed", linewidth = 0.4
+    ) +
+    ggplot2::geom_line(color = plot_colors[1], linewidth = 0.7) +
+    ggplot2::geom_point(color = plot_colors[1], fill = "white", shape = 21, size = 2.2, stroke = 1) +
+    ggplot2::geom_text(
+      data = df[df$last, ], ggplot2::aes(label = value_text(y)),
+      vjust = -1, size = 3, color = plot_ink[["primary"]], family = output_font
+    ) +
+    ggplot2::facet_wrap(ggplot2::vars(plan), ncol = ncol, scales = "free_x") +
+    ggplot2::scale_x_discrete(labels = function(k) unname(labels[k])) +
+    ggplot2::scale_y_continuous(labels = y_labels, expand = ggplot2::expansion(mult = c(0.08, 0.15))) +
+    ggplot2::labs(
+      title = title, subtitle = subtitle, x = "Engine move (from → to), in order", y = y_title,
+      caption = "Modeled OSRM drive time; CAD run card order. Dashed line: today's engines."
+    ) +
+    plot_theme(horizontal = FALSE, legend = FALSE) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(size = 8),
+      plot.caption = ggplot2::element_text(color = plot_ink[["muted"]], size = 8)
+    )
+}
+
 #' Save a plot to an image file
 #'
 #' @param p A ggplot, e.g. from [travel_time_boxplot()].

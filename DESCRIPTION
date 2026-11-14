@@ -21,6 +21,7 @@ Imports:
     ompr.roi,
     openxlsx,
     osrm,
+    parallel,
     prettymapr,
     purrr,
     ROI.plugin.glpk,
@@ -32,5 +33,6 @@ Imports:
 Encoding: UTF-8
 RoxygenNote: 7.3.3
 Suggests: 
+    pkgload,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

@@ -1,4 +1,4 @@
-# 07 - Scenario vs scenario comparison (data step, slow: ~20 min)
+# 07 - Scenario vs scenario comparison (data step, slow: a few minutes)
 #
 # The top scenarios against each other and against every other group, the
 # baseline included (first minus second, a top scenario always first), with
@@ -42,6 +42,11 @@ pair_metrics <- c(
   "pct_within_8m58s", # 8:58, EMS High First Unit
   "pct_within_10m21s" # 10:21, EMS High ERF
 )
+
+# Worker processes for the bootstrap (~10 s to start). The intervals are the
+# same for any number; 1 runs it in this process. Up to the logical cores
+# (parallel::detectCores()) helps a little more.
+n_cores <- parallel::detectCores(logical = FALSE)
 
 # Config ----------------------------------------------------------------------
 
@@ -87,7 +92,8 @@ cmp_pairs <- compare_scenarios(
   simultaneous = TRUE, # FALSE = each pair's own 95% interval
   resample = "call", # or "zone": whole FDZs
   predict_years = 1, # NULL = CIs of the long-run differences
-  data_years = years # how many years each filter set's calls cover
+  data_years = years, # how many years each filter set's calls cover
+  n_cores = n_cores
 )
 
 # Write -----------------------------------------------------------------------

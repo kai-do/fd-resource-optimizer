@@ -118,6 +118,15 @@ test_that("the same seed gives the same confidence intervals", {
   expect_identical(first$ci_upper, second$ci_upper)
 })
 
+test_that("chunked resamples (n_cores) are repeatable and recorded in Settings", {
+  first <- export_to_temp(ci = TRUE, n_boot = 100, seed = 11, n_cores = 1)
+  second <- export_to_temp(ci = TRUE, n_boot = 100, seed = 11, n_cores = 1)
+
+  expect_identical(first$sheets$Overall$ci_lower, second$sheets$Overall$ci_lower)
+  settings <- first$sheets$Settings
+  expect_match(settings$value[settings$setting == "random streams"], "chunked")
+})
+
 test_that("a filter set that keeps no calls gives no comparison rows", {
   # the only night call (I2) is AEMT, so Night ALS keeps nothing
   out <- export_to_temp(filters = list(incident_filter("All calls"), night_als()))

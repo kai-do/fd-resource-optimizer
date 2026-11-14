@@ -40,6 +40,11 @@
 #'   the range the difference would fall in over a future period that long,
 #'   with the same pattern of calls; the data's years are each filter set's
 #'   [filter_years()].
+#' @param n_cores `NULL` draws the resamples in one stream, in this process.
+#'   A number draws them in fixed chunks, each with its own random number
+#'   stream, over that many worker processes (1 = in this process): the
+#'   intervals are the same for any number, only the run time changes.
+#'   Workers take ~10 seconds to start.
 #'
 #' @return One row per filter set, scenario, due level and metric:
 #'   `filter_name`, `scenario_id`, `scenario_name`, `due`, `metric`,
@@ -57,13 +62,15 @@ compare_overall <- function(
   n_boot = 1000,
   level = 0.95,
   resample = c("zone", "call"),
-  predict_years = NULL
+  predict_years = NULL,
+  n_cores = NULL
 ) {
   resample <- match.arg(resample)
   check_predict(predict_years, resample)
+  check_n_cores(n_cores)
   paired <- paired_calls(scenarios, matrix_df, runcard_df, filters, due)
   data_years <- if (!is.null(predict_years)) filter_years(filters, matrix_df)
-  compare_overall_paired(paired, thresholds, ci, n_boot, level, resample, predict_years, data_years)
+  compare_overall_paired(paired, thresholds, ci, n_boot, level, resample, predict_years, data_years, n_cores)
 }
 
 # compare_overall() from precomputed paired_calls(), so several
@@ -71,9 +78,12 @@ compare_overall <- function(
 # filter_years(), needed with predict_years
 compare_overall_paired <- function(
   paired, thresholds, ci, n_boot, level,
-  resample = "zone", predict_years = NULL, data_years = NULL
+  resample = "zone", predict_years = NULL, data_years = NULL, n_cores = NULL
 ) {
   groups <- split_groups(paired)
+  # one set of workers for every scenario's bootstrap
+  cl <- if (ci) boot_cluster(n_cores)
+  on.exit(boot_stop(cl))
 
   out <- lapply(groups, function(g) {
     both <- g[!is.na(g$baseline_minutes) & !is.na(g$scenario_minutes), ]
@@ -101,7 +111,10 @@ compare_overall_paired <- function(
     if (ci) {
       share <- if (!is.null(predict_years)) predict_years / data_years$years[match(g$filter_name[1], data_years$filter_name)]
       cluster <- if (resample == "zone") both$fdz_id else both$dest_id
-      intervals <- bootstrap_diffs(both, thresholds, n_boot, level, cluster = cluster, predict_share = share)
+      intervals <- bootstrap_diffs(
+        both, thresholds, n_boot, level,
+        cluster = cluster, predict_share = share, chunked = !is.null(n_cores), cl = cl
+      )
       rows <- merge(rows, intervals, by = "metric", all.x = TRUE, sort = FALSE)
       rows$level <- level
       rows$resample <- resample
@@ -570,7 +583,15 @@ sort_compare <- function(out, paired, then, metric_order) {
 # `predict_share` (the future period's calls as a share of the data's, e.g.
 # 1/3 for one year of three) turns the interval into a prediction range:
 # where the diff would fall over such a period, not the long-run average.
-bootstrap_diffs <- function(both, thresholds, n_boot, level, cluster = both$fdz_id, predict_share = NULL) {
+#
+# `chunked = TRUE` draws the resamples in chunks, each on its own random
+# number stream (utils_boot.R), so the result is the same in this process or
+# spread over the workers of `cl` (boot_cluster()); `FALSE` draws them all on
+# the caller's stream, as before chunks.
+bootstrap_diffs <- function(
+  both, thresholds, n_boot, level, cluster = both$fdz_id, predict_share = NULL,
+  chunked = FALSE, cl = NULL
+) {
   metrics <- bootstrap_metrics(thresholds)
   if (nrow(both) == 0) {
     return(data.frame(metric = metrics, ci_lower = NA_real_, ci_upper = NA_real_))
@@ -578,11 +599,12 @@ bootstrap_diffs <- function(both, thresholds, n_boot, level, cluster = both$fdz_
 
   id <- as.integer(factor(cluster))
   n_cluster <- max(id)
-  diff_of <- bootstrap_diff_fn(both, thresholds, id, n_cluster)
-  draws <- vapply(seq_len(n_boot), function(b) {
-    diff_of(resample_weights(n_cluster, predict_share))
-  }, numeric(length(metrics)))
-  draws <- matrix(draws, nrow = length(metrics))
+  draws_of <- boot_draws_fn(bootstrap_diff_fn(both, thresholds, id, n_cluster), n_cluster, predict_share, length(metrics))
+  draws <- if (chunked) {
+    do.call(cbind, run_boot_chunks(draws_of, n_boot, cl))
+  } else {
+    draws_of(n_boot)
+  }
 
   alpha <- (1 - level) / 2
   data.frame(
@@ -590,6 +612,21 @@ bootstrap_diffs <- function(both, thresholds, n_boot, level, cluster = both$fdz_
     ci_lower = apply(draws, 1, stats::quantile, alpha, names = FALSE),
     ci_upper = apply(draws, 1, stats::quantile, 1 - alpha, names = FALSE)
   )
+}
+
+# A function of n making n resamples of `draw` (a function of the weights,
+# returning n_out values): an n_out x n matrix. Built here, not inside
+# bootstrap_diffs(), so its environment holds only what a draw needs (it is
+# copied to worker processes).
+boot_draws_fn <- function(draw, n_cluster, predict_share, n_out) {
+  force(draw)
+  force(n_cluster)
+  force(predict_share)
+  force(n_out)
+  function(n) {
+    out <- vapply(seq_len(n), function(b) draw(resample_weights(n_cluster, predict_share)), numeric(n_out))
+    matrix(out, nrow = n_out)
+  }
 }
 
 # One resample: how many times each of n clusters is drawn. With
@@ -649,6 +686,16 @@ bootstrap_metrics <- function(thresholds) {
 # quantile(type = 7) on the resampled calls. Clusters with no calls here
 # (n_cluster can cover calls from elsewhere) just add nothing.
 bootstrap_diff_fn <- function(both, thresholds, id, n_cluster) {
+  scenario <- bootstrap_side_fn(both$scenario_minutes, both$scenario_distance_m, thresholds, id, n_cluster)
+  baseline <- bootstrap_side_fn(both$baseline_minutes, both$baseline_distance_m, thresholds, id, n_cluster)
+  rm(both, id)
+  function(w) scenario(w) - baseline(w)
+}
+
+# One side of bootstrap_diff_fn(): a function of one resample's weights that
+# returns that side's values, one per bootstrap_metrics(). Pairs that share a
+# side (the same scenario on the same calls) can share one of these.
+bootstrap_side_fn <- function(minutes, distance_m, thresholds, id, n_cluster) {
   cluster_n <- tabulate(id, n_cluster)
   present <- sort(unique(id))
   cluster_sum <- function(x) {
@@ -657,24 +704,20 @@ bootstrap_diff_fn <- function(both, thresholds, id, n_cluster) {
     out
   }
 
-  side <- function(prefix) {
-    minutes <- both[[paste0(prefix, "_minutes")]]
-    o <- order(minutes)
-    list(
-      value = minutes[o],
-      id = id[o],
-      sums = c(
-        list(minutes = cluster_sum(minutes), distance = cluster_sum(both[[paste0(prefix, "_distance_m")]])),
-        stats::setNames(lapply(thresholds, function(t) cluster_sum(minutes <= t)), paste0("within_", thresholds))
-      )
-    )
-  }
-  sides <- list(baseline = side("baseline"), scenario = side("scenario"))
+  o <- order(minutes)
+  value <- minutes[o]
+  sorted_id <- id[o]
+  sums <- c(
+    list(minutes = cluster_sum(minutes), distance = cluster_sum(distance_m)),
+    stats::setNames(lapply(thresholds, function(t) cluster_sum(minutes <= t)), paste0("within_", thresholds))
+  )
+  # keep only what a draw needs, so the function is small to send to workers
+  rm(o, minutes, distance_m, id, present, cluster_sum)
 
-  draw_stats <- function(s, w) {
-    count <- cumsum(w[s$id])
+  function(w) {
+    count <- cumsum(w[sorted_id])
     n <- count[length(count)]
-    order_stat <- function(j) s$value[findInterval(j - 1, count) + 1]
+    order_stat <- function(j) value[findInterval(j - 1, count) + 1]
     q <- vapply(c(0.5, 0.9), function(p) {
       h <- (n - 1) * p + 1
       lo <- floor(h)
@@ -682,9 +725,7 @@ bootstrap_diff_fn <- function(both, thresholds, id, n_cluster) {
       x_lo + (h - lo) * (order_stat(min(lo + 1, n)) - x_lo)
     }, numeric(1))
     total <- sum(w * cluster_n)
-    weighted <- vapply(s$sums, function(z) sum(w * z) / total, numeric(1))
+    weighted <- vapply(sums, function(z) sum(w * z) / total, numeric(1))
     c(weighted[["minutes"]], q, weighted[["distance"]], weighted[paste0("within_", thresholds)])
   }
-
-  function(w) draw_stats(sides$scenario, w) - draw_stats(sides$baseline, w)
 }

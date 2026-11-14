@@ -278,3 +278,37 @@ test_that("save_plot writes a PNG", {
   expect_true(file.exists(file))
   expect_error(save_plot(boxplot_of(), tempfile(fileext = ".docx")), ".png or .pdf")
 })
+
+# move_plan_plot --------------------------------------------------------------
+
+two_plans <- function() {
+  a <- move_order(22, 7, NULL, make_scenario_matrix_df(), runcard(), incident_filter("All calls"), thresholds = 4)$steps
+  b <- move_order(22, c(1, 7), NULL, make_scenario_matrix_df(), runcard(), incident_filter("All calls"), thresholds = 4)$steps
+  a$plan <- "Plan A"
+  b$plan <- "Plan B"
+  rbind(a, b)
+}
+
+test_that("move_plan_plot has a panel per plan, today then each move", {
+  p <- move_plan_plot(two_plans(), years = 2)
+  b <- ggplot2::ggplot_build(p)
+  pts <- b$data[[3]]
+
+  expect_equal(nrow(pts), 4)
+  expect_equal(sort(unique(as.integer(pts$PANEL))), 1:2)
+  expect_equal(pts$y, c(22, 2.5, 5.5, 3.5)) # total minutes per year over 2 years
+  expect_equal(b$data[[1]]$yintercept, c(22, 5.5)) # today's line in each panel
+  expect_equal(b$data[[4]]$label, c("2", "4")) # end values only
+  labels <- b$layout$panel_params[[1]]$x$get_labels()
+  expect_equal(unname(labels), c("Today", "7 → 1"))
+  expect_equal(p$labels$y, "Total Minutes per Year")
+})
+
+test_that("move_plan_plot shows shares as percents and checks its input", {
+  b <- ggplot2::ggplot_build(move_plan_plot(two_plans(), metric = "pct_within_4min"))
+  expect_equal(b$data[[3]]$y, c(0, 100, 75, 100)) # A: 7 -> 1 puts every call within 4 min
+
+  steps <- two_plans()
+  expect_error(move_plan_plot(steps[setdiff(names(steps), "plan")]), "plan column")
+  expect_error(move_plan_plot(steps, metric = "nope"), "Unknown metric")
+})

@@ -59,6 +59,9 @@
 #' @param overdispersion How much more zone call counts vary than chance
 #'   (1 = not at all), e.g. from [overdispersion_factor()]. Every interval is
 #'   widened about its difference by the square root.
+#' @param n_cores Worker processes for the bootstrap, as in
+#'   [compare_overall()]: `NULL` draws in one stream, a number in fixed chunks
+#'   (the same intervals for any number).
 #' @param predict_years,data_years `NULL` gives confidence intervals for the
 #'   long-run differences. A number of years (with `resample = "call"`) gives
 #'   instead the range each difference would fall in over a future period
@@ -88,9 +91,11 @@ compare_scenarios <- function(
   resample = c("zone", "call"),
   overdispersion = 1,
   predict_years = NULL,
-  data_years = NULL
+  data_years = NULL,
+  n_cores = NULL
 ) {
   resample <- match.arg(resample)
+  check_n_cores(n_cores)
   if (!is.numeric(overdispersion) || length(overdispersion) != 1 || is.na(overdispersion) || overdispersion < 1) {
     stop("overdispersion must be one number, 1 or more", call. = FALSE)
   }
@@ -130,6 +135,9 @@ compare_scenarios <- function(
   }
 
   involved <- unique(unlist(pairs))
+  chunked <- !is.null(n_cores)
+  cl <- boot_cluster(n_cores)
+  on.exit(boot_stop(cl))
   out <- list()
   for (f in filter_names) {
     for (d in dues) {
@@ -139,11 +147,15 @@ compare_scenarios <- function(
       share <- predict_share(f)
       rows <- if (simultaneous) {
         universe <- if (resample == "zone") sort(unique(df$fdz_id)) else sort(unique(df$dest_id))
-        simultaneous_pairs(boths, universe, resample, metrics, thresholds, n_boot, level, share)
+        simultaneous_pairs(
+          boths, universe, resample, metrics, thresholds, n_boot, level, share,
+          groups = pairs, chunked = chunked, cl = cl
+        )
       } else {
         lapply(
           boths, marginal_pair, resample,
-          metrics = metrics, thresholds = thresholds, n_boot = n_boot, level = level, predict_share = share
+          metrics = metrics, thresholds = thresholds, n_boot = n_boot, level = level, predict_share = share,
+          chunked = chunked, cl = cl
         )
       }
       for (k in seq_along(pairs)) {
@@ -366,10 +378,13 @@ widen_intervals <- function(rows, overdispersion) {
 }
 
 # One pair with its own resamples and ordinary intervals
-marginal_pair <- function(both, resample, metrics, thresholds, n_boot, level, predict_share = NULL) {
+marginal_pair <- function(
+  both, resample, metrics, thresholds, n_boot, level, predict_share = NULL, chunked = FALSE, cl = NULL
+) {
   intervals <- bootstrap_diffs(
     both, thresholds, n_boot, level,
-    cluster = resample_cluster(both, resample), predict_share = predict_share
+    cluster = resample_cluster(both, resample), predict_share = predict_share,
+    chunked = chunked, cl = cl
   )
   ci <- intervals[match(metrics, intervals$metric), ]
   pair_values(both, metrics, thresholds) |>
@@ -380,23 +395,54 @@ marginal_pair <- function(both, resample, metrics, thresholds, n_boot, level, pr
 # every call, of the filter set and due level), then each metric's intervals
 # widened to hold together. A pair's resample is the shared one restricted to
 # its own calls.
-simultaneous_pairs <- function(boths, universe, resample, metrics, thresholds, n_boot, level, predict_share = NULL) {
+#
+# `groups` names each pair's two scenarios, c(first, second). A scenario on
+# the same calls in several pairs (the usual case: every pair served on every
+# call) is computed once per resample and shared, which gives the same draws
+# as computing it for each pair. `cache = FALSE` computes every pair's own,
+# for checking that. `chunked` and `cl` as in bootstrap_diffs().
+simultaneous_pairs <- function(
+  boths, universe, resample, metrics, thresholds, n_boot, level, predict_share = NULL,
+  groups = NULL, cache = TRUE, chunked = FALSE, cl = NULL
+) {
   n_u <- length(universe)
   rows_of <- match(metrics, bootstrap_metrics(thresholds))
-  diff_fns <- lapply(boths, function(both) {
-    if (nrow(both) == 0) {
-      return(NULL)
+  served <- which(vapply(boths, nrow, integer(1)) > 0)
+  if (is.null(groups) || !cache) {
+    # a name of its own for every side: nothing shared
+    groups <- lapply(seq_along(boths), function(k) paste0(c("first", "second"), "_", k))
+  }
+
+  # the distinct sides: a scenario on a set of calls
+  sides <- list()
+  keys <- list()
+  side_of <- function(group, both, prefix) {
+    for (i in seq_along(keys)) {
+      if (identical(keys[[i]]$group, group) && identical(keys[[i]]$dest_id, both$dest_id)) {
+        return(i)
+      }
     }
-    bootstrap_diff_fn(both, thresholds, match(resample_cluster(both, resample), universe), n_u)
+    sides[[length(sides) + 1]] <<- bootstrap_side_fn(
+      both[[paste0(prefix, "_minutes")]], both[[paste0(prefix, "_distance_m")]], thresholds,
+      match(resample_cluster(both, resample), universe), n_u
+    )
+    keys[[length(keys) + 1]] <<- list(group = group, dest_id = both$dest_id)
+    length(sides)
+  }
+  # pair_calls() puts the first scenario on the scenario side
+  pair_sides <- lapply(served, function(k) {
+    c(side_of(groups[[k]][1], boths[[k]], "scenario"), side_of(groups[[k]][2], boths[[k]], "baseline"))
   })
 
-  draws <- lapply(boths, function(both) matrix(NA_real_, length(metrics), n_boot))
-  for (b in seq_len(n_boot)) {
-    w <- resample_weights(n_u, predict_share)
-    for (k in seq_along(diff_fns)[!vapply(diff_fns, is.null, logical(1))]) {
-      draws[[k]][, b] <- diff_fns[[k]](w)[rows_of]
-    }
+  draws_of <- pair_draws_fn(sides, pair_sides, n_u, predict_share, rows_of)
+  served_draws <- if (chunked) {
+    chunks <- run_boot_chunks(draws_of, n_boot, cl)
+    lapply(seq_along(served), function(k) do.call(cbind, lapply(chunks, `[[`, k)))
+  } else {
+    draws_of(n_boot)
   }
+  draws <- lapply(boths, function(both) matrix(NA_real_, length(metrics), n_boot))
+  draws[served] <- served_draws
   # a resample that draws none of a pair's zones has no value for it; leave
   # those resamples out of every pair, so all are judged on the same ones
   usable <- Reduce(`&`, lapply(draws, function(x) colSums(!is.finite(x)) == 0))
@@ -421,4 +467,27 @@ simultaneous_pairs <- function(boths, universe, resample, metrics, thresholds, n
       values[[k]], lower[k, ], upper[k, ], level, "simultaneous", per_level, sum(served)
     )
   })
+}
+
+# A function of n making n shared resamples: for each served pair, a
+# metrics x n matrix of first minus second. Each distinct side is computed
+# once per resample. Its environment holds only what a draw needs (it is
+# copied to worker processes).
+pair_draws_fn <- function(sides, pair_sides, n_u, predict_share, rows_of) {
+  force(sides)
+  force(pair_sides)
+  force(n_u)
+  force(predict_share)
+  force(rows_of)
+  function(n) {
+    out <- lapply(pair_sides, function(p) matrix(NA_real_, length(rows_of), n))
+    for (b in seq_len(n)) {
+      w <- resample_weights(n_u, predict_share)
+      values <- lapply(sides, function(side) side(w))
+      for (k in seq_along(pair_sides)) {
+        out[[k]][, b] <- (values[[pair_sides[[k]][1]]] - values[[pair_sides[[k]][2]]])[rows_of]
+      }
+    }
+    out
+  }
 }

@@ -19,6 +19,8 @@
 #' @param file Path of the .xlsx file to write (overwritten if it exists).
 #' @param seed If not `NULL`, passed to `set.seed()` before the bootstrap, so
 #'   the confidence intervals can be repeated; recorded in the Settings sheet.
+#' @param n_cores Worker processes for the bootstrap, as in
+#'   [compare_overall()].
 #'
 #' @return Invisibly, a named list of the sheets' data frames: Settings,
 #'   Scenarios, Filter Sets, Overall, Calls, By FDZ, By Station (and By
@@ -41,10 +43,12 @@ export_comparison <- function(
   level = 0.95,
   resample = c("zone", "call"),
   predict_years = NULL,
-  seed = NULL
+  seed = NULL,
+  n_cores = NULL
 ) {
   resample <- match.arg(resample)
   check_predict(predict_years, resample)
+  check_n_cores(n_cores)
   if (inherits(filters, "incident_filter")) {
     filters <- list(filters)
   }
@@ -56,10 +60,10 @@ export_comparison <- function(
   }
 
   sheets <- list(
-    "Settings" = settings_sheet(matrix_df, due, thresholds, slower_by, ci, n_boot, level, resample, predict_years, seed),
+    "Settings" = settings_sheet(matrix_df, due, thresholds, slower_by, ci, n_boot, level, resample, predict_years, seed, n_cores),
     "Scenarios" = scenarios_sheet(scenarios),
     "Filter Sets" = filters_sheet(filters),
-    "Overall" = compare_overall_paired(paired, thresholds, ci, n_boot, level, resample, predict_years, data_years),
+    "Overall" = compare_overall_paired(paired, thresholds, ci, n_boot, level, resample, predict_years, data_years, n_cores),
     "Calls" = compare_calls_paired(paired, slower_by),
     "By FDZ" = compare_by_fdz_paired(paired, thresholds),
     "By Station" = compare_by_station_paired(paired)
@@ -75,7 +79,7 @@ export_comparison <- function(
 
 settings_sheet <- function(
   matrix_df, due, thresholds, slower_by, ci, n_boot, level,
-  resample = "zone", predict_years = NULL, seed = NULL
+  resample = "zone", predict_years = NULL, seed = NULL, n_cores = NULL
 ) {
   listed <- function(x) paste(x, collapse = ", ")
   data.frame(
@@ -90,7 +94,8 @@ settings_sheet <- function(
       "bootstrap resamples",
       "resampled",
       "interval level",
-      "seed"
+      "seed",
+      "random streams"
     ),
     value = c(
       format(Sys.time(), "%Y-%m-%d %H:%M %Z"),
@@ -103,7 +108,8 @@ settings_sheet <- function(
       if (ci) n_boot else "",
       if (ci) (if (resample == "zone") "whole zones" else "calls") else "",
       if (ci) level else "",
-      if (is.null(seed)) "" else seed
+      if (is.null(seed)) "" else seed,
+      if (!ci) "" else if (is.null(n_cores)) "one stream" else "chunked (same intervals on any number of cores)"
     )
   )
 }

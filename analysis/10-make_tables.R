@@ -10,6 +10,8 @@
 #   tbl_territory_scenario_<k>_. coverage of each station's territory (its
 #                                zones' calls, whoever responds), for each of
 #                                the 3
+#   tbl_territory_calls          calls per year in each territory and its
+#                                share (the same in every scenario)
 #
 # The scenario-vs-scenario comparison (slow) is step 07.
 #
@@ -136,7 +138,7 @@ fdz_metrics <- c(
 )
 
 territory_metrics <- c(
-  "n_calls",
+  "n_calls", # the same in baseline and scenario: one count and its % of total
   "mean_minutes",
   "p90_minutes"
 )
@@ -335,5 +337,21 @@ territory_table(
 ) |>
   save_table(file.path(tables_dir, "tbl_territory_scenario_3_r1_r11.docx"))
 
+
+# Calls per year in each territory, with its share of the total. The same in
+# the baseline and every scenario (a call's territory doesn't depend on who
+# responds), so one table stands for all of them
+territory_table(
+  df = cmp_territory,
+  scenario = NULL, # any scenario: the counts are the same
+  filter_name = first_filter,
+  due = due_level,
+  metrics = "n_calls",
+  baseline_name = baseline_name,
+  title = "Calls per Year by Station Territory",
+  subtitle = paste(first_filter, "Same in every scenario", sep = " · "),
+  pct_total = TRUE
+) |>
+  save_table(file.path(tables_dir, "tbl_territory_calls.docx"))
 
 message("Tables written to ", tables_dir)

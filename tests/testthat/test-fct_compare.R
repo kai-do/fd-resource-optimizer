@@ -201,6 +201,29 @@ test_that("bootstrap intervals under a seed stay as they were", {
   expect_equal(ci$ci_upper, c(1.4, 2, 2, 140, 0.333333333333333, 0.333333333333333))
 })
 
+test_that("chunked bootstrap: repeatable, and the same on 1 or 2 cores", {
+  skip_on_cran()
+  both <- suppressMessages(paired_calls(
+    make_scenarios(), make_scenario_matrix_df(), runcard(), list(incident_filter("All calls")), 1
+  ))
+  run <- function(cl = NULL) {
+    set.seed(12)
+    bootstrap_diffs(both, thresholds = 4, n_boot = 100, level = 0.9, chunked = TRUE, cl = cl)
+  }
+  local_one <- run()
+  expect_identical(run(), local_one)
+
+  cl <- boot_cluster(2)
+  on.exit(boot_stop(cl))
+  expect_identical(run(cl), local_one)
+})
+
+test_that("boot_chunks splits the resamples evenly", {
+  expect_equal(boot_chunks(1000), c(rep(42L, 16), rep(41L, 8)))
+  expect_equal(sum(boot_chunks(1000)), 1000)
+  expect_equal(boot_chunks(5), rep(1L, 5))
+})
+
 # compare_calls ---------------------------------------------------------------
 
 test_that("compare_calls describes how individual calls change", {

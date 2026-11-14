@@ -1,23 +1,25 @@
 # 08 - Weighted p-median: where to add units around a fixed set (data step)
 #
-# Keeps fixed_stations open (e.g. the chosen rescue placement) and picks the
-# n_add other stations that minimize total travel time for the filter set's
-# calls, each zone served by its cheapest open station. Use it to propose ALS
-# engine placements once the rescues are settled.
+# For each of the top rescue scenarios from step 06, keeps its rescue stations open and
+# picks the n_add other stations that minimize total travel time for the
+# filter set's calls, each zone served by its cheapest open station: where ALS
+# engines would go with those rescues in place.
 #
 # This is the plain p-median: no run card order and every unit always
 # available. It proposes station sets; step 09 scores them on the run card
-# against today's ALS engines. Or score them like any other scenario by pasting a solution's open_stations into
-# step 06's scenarios tribble and rerunning steps 06-12.
+# against today's ALS engines.
 #
 # Inputs  (data_outputs_dir): incident_travel_matrix_fdz.parquet  (step 04)
-# Outputs (data_outputs_dir): p_median_solutions.parquet
+#                             scenarios.parquet,
+#                             compare_overall.parquet             (step 06)
+# Outputs (data_outputs_dir): als/<rescue scenario>/p_median_solutions.parquet
 #                             One row per solution, best first: rank,
 #                             objective (total travel minutes with
 #                             cost = "mean_minutes"), open stations and the
 #                             added ones, the change from today's ALS
 #                             engines, and which engines would move where
-#                             (list columns).
+#                             (list columns). <rescue scenario> is the
+#                             scenario's name as a folder, e.g. R26_16_R1.
 #
 # Run from the repo root.
 
@@ -25,14 +27,19 @@ pkgload::load_all()
 
 # Settings --------------------------------------------------------------------
 
-# Stations that stay open: the chosen rescue placement ("R26->16 +R1")
-fixed_stations <- c(1, 11, 14, 16, 21, 23, 24, 30)
+# Rescue scenarios to place engines around: the best n_top from step 06 on
+# rank_by (as in steps 07 and 10-12), or name them in rescue_scenarios
+# (overrides n_top), e.g. c("R26->16 +R1", "+R1")
+n_top <- 3
+rank_by <- "total_minutes"
+rescue_scenarios <- NULL
 
 # How many more stations to open (ALS engines)
-n_add <- 9
+n_add <- 8
 
 # Where the ALS engines are today, to compare the solutions with
-current_als_engines <- c(1, 2, 4, 5, 9, 12, 19, 21, 27)
+# Where the ALS engines are today (8; none at a rescue station)
+current_als_engines <- c(1, 2, 4, 5, 9, 12, 19, 27)
 
 # Station-to-zone cost: "mean_minutes" (objective = total minutes),
 # "median_minutes" or "p90_minutes"
@@ -59,9 +66,19 @@ matrix_file <- file.path(
   cfg$data_outputs_dir,
   "incident_travel_matrix_fdz.parquet"
 )
-output_file <- file.path(cfg$data_outputs_dir, "p_median_solutions.parquet")
+als_dir <- file.path(cfg$data_outputs_dir, "als")
 
 # Read ------------------------------------------------------------------------
+
+rescues <- pick_scenarios(
+  as.data.frame(arrow::read_parquet(file.path(cfg$data_outputs_dir, "scenarios.parquet"))),
+  arrow::read_parquet(file.path(cfg$data_outputs_dir, "compare_overall.parquet")),
+  n_top = n_top,
+  rank_by = rank_by,
+  names = rescue_scenarios,
+  due = 1
+)
+message("Rescue scenarios: ", paste(rescues$scenario_name, collapse = ", "))
 
 # The matrix has 14M+ rows: only the travel columns and the ones the filter
 # set uses
@@ -86,76 +103,70 @@ travel_stats <- travel_matrix |>
 
 rm(travel_matrix)
 
-# Optimize --------------------------------------------------------------------
+# Optimize, for each rescue scenario --------------------------------------------
 
-result <- solve_p_median(
-  travel_stats,
-  p = length(fixed_stations) + n_add,
-  cost = cost,
-  include = fixed_stations,
-  exclude = exclude,
-  n_solutions = n_solutions
-)
+for (i in seq_len(nrow(rescues))) {
+  fixed_stations <- sort(unlist(rescues$stations[[i]]))
+  message("\n-- ", rescues$scenario_name[i], " --")
 
-# Current ALS engines ---------------------------------------------------------
-#
-# The same objective for today's engines: with every station required and
-# p equal to their count, the solver has nothing to choose and just scores
-# the set. Engines at a fixed (rescue) station add no new location, since
-# only the first ALS unit counts here.
-
-current_open <- sort(union(fixed_stations, current_als_engines))
-current <- solve_p_median(
-  travel_stats,
-  p = length(current_open),
-  cost = cost,
-  include = current_open
-)
-
-overlap <- intersect(current_als_engines, fixed_stations)
-if (length(overlap) > 0) {
-  message(
-    "Current engines at fixed stations, no new location: ",
-    paste(overlap, collapse = ", ")
+  result <- solve_p_median(
+    travel_stats,
+    p = length(fixed_stations) + n_add,
+    cost = cost,
+    include = fixed_stations,
+    exclude = exclude,
+    n_solutions = n_solutions
   )
+
+  # Current ALS engines: the same objective for today's engines. With every
+  # station required and p equal to their count, the solver has nothing to
+  # choose and just scores the set. Engines at a fixed (rescue) station add no
+  # new location, since only the first ALS unit counts here.
+  current_open <- sort(union(fixed_stations, current_als_engines))
+  current <- solve_p_median(
+    travel_stats,
+    p = length(current_open),
+    cost = cost,
+    include = current_open
+  )
+
+  overlap <- intersect(current_als_engines, fixed_stations)
+  if (length(overlap) > 0) {
+    message(
+      "Current engines at fixed stations, no new location: ",
+      paste(overlap, collapse = ", ")
+    )
+  }
+
+  solutions <- tibble::tibble(
+    rank = vapply(result$alternatives, `[[`, integer(1), "rank"),
+    objective = vapply(result$alternatives, `[[`, numeric(1), "objective"),
+    open_stations = lapply(result$alternatives, `[[`, "open_stations"),
+    added_stations = lapply(open_stations, setdiff, fixed_stations),
+    # change from today's engines: negative is less total travel time
+    diff_from_current = objective - current$objective,
+    pct_diff_from_current = 100 * diff_from_current / current$objective,
+    # engines that would move, and where to (engines at a fixed station always
+    # move, since the solutions only add new locations)
+    move_from = lapply(added_stations, \(s) setdiff(current_als_engines, s)),
+    move_to = lapply(added_stations, \(s) setdiff(s, current_als_engines))
+  )
+
+  # Station sets only: the objective is the optimizer's (cheapest station),
+  # not the run card; step 09 scores the sets on the run card
+  message("Fixed: ", paste(fixed_stations, collapse = ", "))
+  message("Current engines at: ", paste(current_als_engines, collapse = ", "))
+  for (k in seq_len(nrow(solutions))) {
+    message(sprintf(
+      "#%d  added: %s  |  move from %s to %s",
+      solutions$rank[k],
+      paste(solutions$added_stations[[k]], collapse = ", "),
+      paste(solutions$move_from[[k]], collapse = ", "),
+      paste(solutions$move_to[[k]], collapse = ", ")
+    ))
+  }
+
+  out_dir <- file.path(als_dir, scenario_stub(rescues$scenario_name[i]))
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  arrow::write_parquet(solutions, file.path(out_dir, "p_median_solutions.parquet"))
 }
-
-# Solutions vs today ------------------------------------------------------------
-
-solutions <- tibble::tibble(
-  rank = vapply(result$alternatives, `[[`, integer(1), "rank"),
-  objective = vapply(result$alternatives, `[[`, numeric(1), "objective"),
-  open_stations = lapply(result$alternatives, `[[`, "open_stations"),
-  added_stations = lapply(open_stations, setdiff, fixed_stations),
-  # change from today's engines: negative is less total travel time
-  diff_from_current = objective - current$objective,
-  pct_diff_from_current = 100 * diff_from_current / current$objective,
-  # engines that would move, and where to (engines at a fixed station always
-  # move, since the solutions only add new locations)
-  move_from = lapply(added_stations, \(s) setdiff(current_als_engines, s)),
-  move_to = lapply(added_stations, \(s) setdiff(s, current_als_engines))
-)
-
-message("Fixed: ", paste(fixed_stations, collapse = ", "))
-message(sprintf(
-  "Current engines  %s %.0f  at: %s",
-  cost,
-  current$objective,
-  paste(current_als_engines, collapse = ", ")
-))
-for (k in seq_len(nrow(solutions))) {
-  message(sprintf(
-    "#%d  %s %.0f (%+.1f%%)  added: %s  |  move from %s to %s",
-    solutions$rank[k],
-    cost,
-    solutions$objective[k],
-    solutions$pct_diff_from_current[k],
-    paste(solutions$added_stations[[k]], collapse = ", "),
-    paste(solutions$move_from[[k]], collapse = ", "),
-    paste(solutions$move_to[[k]], collapse = ", ")
-  ))
-}
-
-# Write -----------------------------------------------------------------------
-
-arrow::write_parquet(solutions, output_file)

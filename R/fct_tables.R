@@ -259,6 +259,8 @@ station_table <- function(
 #'
 #' @return A flextable: one row per territory with Baseline / Scenario / Diff
 #'   for each metric, diffs colored green when better and red when worse.
+#'   Calls and FDZs, the same in baseline and scenario, get one Count column
+#'   (and % of Total with `pct_total`).
 #' @noRd
 territory_table <- function(
   df,
@@ -282,7 +284,9 @@ territory_table <- function(
     title = title, subtitle = subtitle,
     pct_total = pct_total,
     time_format = match.arg(time_format),
-    digits = digits
+    digits = digits,
+    # the same calls on both sides: one Count (and % of Total) column
+    fixed_metrics = c("n_calls", "n_fdz")
   )
 }
 
@@ -598,64 +602,290 @@ scenario_pairs_table <- function(
 #' P-median solutions table: where the optimizer would put the units
 #'
 #' One row per solution from step 08: the stations it adds to the fixed set,
-#' the current units that would move and where to, and its total travel
-#' minutes against today's placement. These are the optimizer's own numbers
-#' (each zone served by its cheapest open station), not run card scoring.
+#' the current units that would move and where to, and its run card scoring
+#' against today's placement, best total minutes first. The optimizer's own
+#' totals (each zone served by its cheapest open station) are not shown.
 #'
 #' @param solutions Step 08's `p_median_solutions.parquet`: `rank`,
-#'   `objective`, `added_stations`, `move_from`, `move_to`,
-#'   `diff_from_current`, `pct_diff_from_current`.
-#' @param years Years of calls behind the totals: minutes are shown per year.
-#'   `NULL` shows the totals as they are.
+#'   `added_stations`, `move_from`, `move_to`.
+#' @param overall_df Run card comparison of the solutions against today's
+#'   units: [compare_overall()] (or [annualize_counts()] of it) with scenarios
+#'   named `P-median #<rank>` and today's units as the baseline.
+#' @param metrics Overall metrics after Total Minutes, each shown as the value
+#'   and its change from today.
+#' @param baseline_label Label of the first row, today's units.
 #' @param title,subtitle Table title and subtitle.
+#' @inheritParams overall_table
 #'
 #' @return A flextable.
 #' @noRd
 p_median_solutions_table <- function(
   solutions,
-  years = NULL,
+  overall_df,
+  metrics = c("p90_minutes", "pct_within_8m58s", "pct_within_10m21s"),
+  baseline_label = "Today's engines",
   title = "Optimized ALS Engine Placements",
-  subtitle = "Best station sets around the fixed rescues, against today's engines"
+  subtitle = "Best station sets around the fixed rescues, against today's engines",
+  time_format = c("decimal", "mmss"),
+  digits = 2
 ) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
   stations <- function(x) vapply(x, \(s) paste(sort(unlist(s)), collapse = ", "), character(1))
-  per_year <- if (is.null(years)) 1 else years
-  minutes <- function(x) formatC(x / per_year, format = "f", digits = 0, big.mark = ",")
+  names <- paste0("P-median #", solutions$rank)
+  sel <- select_compare(overall_df, names, NULL, NULL)
+  check_metrics(c("total_minutes", metrics), sel$df$metric)
+  col <- function(sc, m, what) {
+    x <- sel$df[[what]][sel$df$scenario_name == sc & sel$df$metric == m]
+    if (length(x) == 0) NA_real_ else x[1]
+  }
+  values <- function(m, what) vapply(names, col, numeric(1), m = m, what = what, USE.NAMES = FALSE)
+
+  total <- values("total_minutes", "scenario")
+  diff <- values("total_minutes", "diff")
+  base_total <- col(names[1], "total_minutes", "baseline")
+  ord <- order(total)
 
   body <- data.frame(
-    rank = paste0("#", solutions$rank),
-    added = stations(solutions$added_stations),
-    move_from = stations(solutions$move_from),
-    move_to = stations(solutions$move_to),
-    total = minutes(solutions$objective),
-    diff = minutes(solutions$diff_from_current),
-    pct = sprintf("%+.1f%%", solutions$pct_diff_from_current)
+    rank = c(baseline_label, paste0("#", solutions$rank)[ord]),
+    added = c("", stations(solutions$added_stations)[ord]),
+    move_from = c("", stations(solutions$move_from)[ord]),
+    move_to = c("", stations(solutions$move_to)[ord]),
+    total = c(fmt(base_total, "total_minutes"), fmt(total[ord], "total_minutes")),
+    diff = c("", fmt(diff[ord], "total_minutes", diff = TRUE)),
+    pct = c("", sprintf("%+.1f%%", 100 * diff[ord] / base_total))
   )
   colors <- data.frame(
     rank = NA_character_, added = NA_character_, move_from = NA_character_,
     move_to = NA_character_, total = NA_character_,
-    diff = diff_colors(solutions$diff_from_current, rep("total_minutes", nrow(body))),
-    pct = diff_colors(solutions$diff_from_current, rep("total_minutes", nrow(body)))
+    diff = c(NA, diff_colors(diff[ord], "total_minutes")),
+    pct = c(NA, diff_colors(diff[ord], "total_minutes"))
   )
+  for (m in metrics) {
+    v <- values(m, "scenario")[ord]
+    d <- values(m, "diff")[ord]
+    body[[m]] <- c(fmt(col(names[1], m, "baseline"), m), paste0(fmt(v, m), " (", fmt(d, m, diff = TRUE), ")"))
+    colors[[m]] <- c(NA, diff_colors(d, m))
+  }
 
-  build_table(
+  minutes_label <- if (is.null(sel$years)) "Total Minutes" else "Total Minutes / Year"
+  ft <- build_table(
     body,
     labels = c(
       "Solution", "Engine Stations", "Moved From", "Moved To",
-      if (is.null(years)) "Total Minutes" else "Total Minutes / Year",
-      "Diff", "% Diff"
+      minutes_label, "Diff", "% Diff", metric_label(metrics)
     ),
-    groups = c(NA, NA, "Change From Today", "Change From Today", NA, "vs Today", "vs Today"),
+    groups = c(
+      NA, NA, "Change From Today", "Change From Today", NA, "vs Today", "vs Today",
+      rep(NA, length(metrics))
+    ),
     colors = colors,
     n_keys = 1,
     title = title,
     subtitle = subtitle,
-    note = paste(
-      "Modeled OSRM drive time; weighted p-median, each zone served by its",
-      "cheapest open station (not run card order). Diff = solution minus today's engines."
+    years = sel$years,
+    note = "Modeled OSRM drive time; CAD run card order.",
+    notes = paste(
+      "Diff = solution minus today's engines, change in parentheses.",
+      "Solutions are numbered in the optimizer's order and sorted by run card total minutes."
     ),
-    notes = if (!is.null(years)) {
-      paste0("Minutes are yearly averages over ", sprintf("%.1f", years), " years.")
+    max_col_width = 1.3,
+    time_format = time_format
+  )
+  ft <- flextable::italic(ft, i = 1, part = "body")
+  flextable::hline(ft, i = 1, border = officer::fp_border(color = "#BBBBBB"), part = "body")
+}
+
+#' Build-up order table: each added unit and the county after it
+#'
+#' @param steps `steps` from [build_up_order()].
+#' @param years Years of calls behind the counts: minutes and calls are shown
+#'   per year. `NULL` shows the totals.
+#' @param pct_metrics Within-threshold metrics to show (`pct_within_<t>`).
+#'   `NULL` shows every one in `steps`.
+#' @param base_label Label of step 0, the base stations alone.
+#' @param title,subtitle Override the automatic title and subtitle.
+#' @inheritParams overall_table
+#'
+#' @return A flextable: a row for the base stations alone, then one per added
+#'   unit: the minutes it saves, the cumulative saving, and the county's
+#'   total minutes, 90th percentile and within-threshold shares with every
+#'   unit so far in place.
+#' @noRd
+build_up_table <- function(
+  steps,
+  years = NULL,
+  pct_metrics = NULL,
+  base_label = "Rescues only",
+  title = NULL,
+  subtitle = NULL,
+  time_format = c("decimal", "mmss"),
+  digits = 2
+) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
+  steps <- as.data.frame(steps)
+  pct_metrics <- pct_metrics %||% grep("^pct_within_", names(steps), value = TRUE)
+  check_metrics(pct_metrics, grep("^pct_within_", names(steps), value = TRUE))
+  per_year <- function(x) if (is.null(years)) x else x / years
+
+  # from move_order(): each step moves a unit, from -> station
+  moves <- "from" %in% names(steps)
+  saved <- per_year(steps$saved_minutes)
+  body <- data.frame(
+    order = ifelse(steps$step == 0, "", as.character(steps$step)),
+    station = ifelse(
+      steps$step == 0, base_label,
+      if (moves) paste(steps$from, "→", steps$station) else as.character(steps$station)
+    ),
+    saved = fmt(saved, "total_minutes"),
+    cumulative = fmt(per_year(steps$cumulative_saved), "total_minutes"),
+    total = fmt(per_year(steps$total_minutes), "total_minutes"),
+    p90 = fmt(steps$p90_minutes, "p90_minutes")
+  )
+  for (m in pct_metrics) {
+    body[[m]] <- fmt(steps[[m]], m)
+  }
+  body[is.na(body)] <- ""
+  colors <- as.data.frame(lapply(body, function(x) rep(NA_character_, nrow(body))))
+  colors$saved <- ifelse(is.na(saved) | saved == 0, NA_character_, ifelse(saved > 0, better_color, worse_color))
+
+  suffix <- if (is.null(years)) "" else " per Year"
+  labels <- c(
+    "Order", if (moves) "Move Unit (From → To)" else "Add Unit At",
+    paste0("Minutes Saved", suffix), paste0("Cumulative Saved", suffix),
+    paste0("Total Minutes", suffix), metric_label("p90_minutes"), metric_label(pct_metrics)
+  )
+  ft <- build_table(
+    body, labels,
+    groups = NULL,
+    colors = colors,
+    n_keys = 2,
+    title = title %||% if (moves) "Move Order" else "Build-Up Order",
+    subtitle = subtitle %||% paste(steps$filter_name[1], paste(base_label, "at", steps$stations[1]), sep = " · "),
+    years = years,
+    note = "Modeled OSRM drive time; CAD run card order.",
+    notes = c(
+      if (moves) {
+        paste(
+          "Each row moves the unit that saves the most travel minutes, with the moves above it made;",
+          "the last row reaches the target. County values are with every move so far."
+        )
+      } else {
+        paste(
+          "Each row adds the unit that saves the most travel minutes, with the units above it in place;",
+          "county values are with every unit so far."
+        )
+      },
+      paste(
+        "No intervals: savings a few hundred minutes apart are effectively ties.",
+        "A unit can save little or even add minutes when its station is first on a card but farther away."
+      )
+    ),
+    max_col_width = 1.2,
+    time_format = time_format
+  )
+  ft <- flextable::italic(ft, i = 1, part = "body")
+  flextable::hline(ft, i = 1, border = officer::fp_border(color = "#BBBBBB"), part = "body")
+}
+
+#' Build-up order, each unit in its own territory
+#'
+#' @inheritParams build_up_table
+#' @param territory `territory` from [build_up_order()].
+#' @param pct_metric One within-threshold metric to show.
+#' @param n_helps How many other territories to list under Also Helps.
+#'
+#' @return A flextable: one row per added unit, with its own territory's calls
+#'   and its total minutes, 90th percentile and within-threshold share before
+#'   (with the units above in place) and after it is added, the share of the
+#'   unit's saving inside its own territory, and the other territories that
+#'   gain most.
+#' @noRd
+build_up_territory_table <- function(
+  steps,
+  territory,
+  years = NULL,
+  pct_metric = NULL,
+  n_helps = 3,
+  base_label = "Rescues only",
+  title = NULL,
+  subtitle = NULL,
+  time_format = c("decimal", "mmss"),
+  digits = 2
+) {
+  time_format <- match.arg(time_format)
+  fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
+  steps <- as.data.frame(steps)
+  territory <- as.data.frame(territory)
+  pct_metric <- pct_metric %||% grep("^pct_within_", names(steps), value = TRUE)[1]
+  check_metrics(pct_metric, grep("^pct_within_", names(steps), value = TRUE))
+  per_year <- function(x) if (is.null(years)) x else x / years
+  arrow <- " → "
+
+  s <- steps[steps$step > 0, ]
+  before_after <- function(m, with_diff = FALSE) {
+    b <- s[[paste0("own_", m, "_before")]]
+    a <- s[[paste0("own_", m, "_after")]]
+    if (m == "total_minutes") {
+      b <- per_year(b)
+      a <- per_year(a)
     }
+    text <- paste0(fmt(b, m), arrow, fmt(a, m))
+    if (with_diff) {
+      text <- paste0(text, " (", fmt(a - b, m, diff = TRUE), ")")
+    }
+    ifelse(is.na(b) | is.na(a), "", text)
+  }
+
+  # other territories with the most minutes saved at each step
+  also_helps <- vapply(seq_len(nrow(s)), function(i) {
+    rows <- territory[
+      territory$step == s$step[i] & territory$metric == "total_minutes" & territory$station_id != s$station[i],
+    ]
+    rows$saved <- per_year(-rows$diff)
+    rows <- rows[!is.na(rows$saved) & round(rows$saved) > 0, ]
+    rows <- utils::head(rows[order(-rows$saved), ], n_helps)
+    paste(sprintf("%s (%s)", rows$station_id, fmt(rows$saved, "total_minutes")), collapse = ", ")
+  }, character(1))
+
+  body <- data.frame(
+    order = as.character(s$step),
+    station = as.character(s$station),
+    calls = fmt(per_year(s$own_n_calls), "n_calls"),
+    total = before_after("total_minutes", with_diff = TRUE),
+    p90 = before_after("p90_minutes"),
+    pct = before_after(pct_metric),
+    own_share = ifelse(is.na(s$own_share), "", sprintf("%.0f%%", 100 * s$own_share)),
+    also_helps = also_helps
+  )
+  body[is.na(body)] <- ""
+  colors <- as.data.frame(lapply(body, function(x) rep(NA_character_, nrow(body))))
+
+  suffix <- if (is.null(years)) "" else " per Year"
+  labels <- c(
+    "Order", "Unit At", paste0("Calls", suffix), paste0("Total Minutes", suffix),
+    metric_label("p90_minutes"), metric_label(pct_metric),
+    "Saving in Own Territory", paste0("Also Helps (Minutes Saved", suffix, ")")
+  )
+  build_table(
+    body, labels,
+    groups = NULL,
+    colors = colors,
+    n_keys = 2,
+    title = title %||% "Each Unit in Its Own Territory",
+    subtitle = subtitle %||% paste(steps$filter_name[1], paste(base_label, "at", steps$stations[1]), sep = " · "),
+    years = years,
+    note = "Modeled OSRM drive time; CAD run card order.",
+    notes = c(
+      paste(
+        "Before: with the units above in place; after: with this one added. Own territory: the calls in",
+        "the station's zones. Also Helps: other territories whose minutes drop most with this unit."
+      ),
+      "Order as in the build-up table; no intervals."
+    ),
+    max_col_width = 1.8,
+    time_format = time_format
   )
 }
 
@@ -683,7 +913,7 @@ save_table <- function(ft, path) {
 rows_table <- function(
   df, key, key_label, scenario, filter_name, due, metrics, baseline_name,
   title_prefix, neutral, responders, title, subtitle, pct_total = FALSE,
-  time_format = "decimal", digits = 2
+  time_format = "decimal", digits = 2, fixed_metrics = character()
 ) {
   fmt <- function(x, m, diff = FALSE) format_values(x, m, diff, time_format, digits)
   sel <- select_compare(df, scenario, filter_name, due)
@@ -721,6 +951,23 @@ rows_table <- function(
     n_keys <- 2
   }
 
+  # a metric that is the same in the baseline and every scenario (e.g. a
+  # territory's calls): one Count column (and % of Total), not Baseline /
+  # Scenario / Diff
+  add_fixed <- function(m) {
+    x <- get(sel$scenarios[1], m, "baseline")
+    with_pct <- pct_total && is_count(m)
+    body[[paste0(m, "_v")]] <<- fmt(x, m)
+    colors[[paste0(m, "_v")]] <<- NA_character_
+    if (with_pct) {
+      body[[paste0(m, "_vp")]] <<- format_pct_of_total(x)
+      colors[[paste0(m, "_vp")]] <<- NA_character_
+    }
+    new <- if (with_pct) c("Count", "% of Total") else "Count"
+    labels <<- c(labels, new)
+    groups <<- c(groups, rep(metric_label(m, sel$years), length(new)))
+  }
+
   if (length(sel$scenarios) == 1) {
     # one scenario: a Baseline / Scenario / Diff group per metric
     sc <- sel$scenarios
@@ -733,6 +980,10 @@ rows_table <- function(
       n_keys <- 3
     }
     for (m in metrics) {
+      if (m %in% fixed_metrics) {
+        add_fixed(m)
+        next
+      }
       b <- fill_zero(get(sc, m, "baseline"), m)
       s <- fill_zero(get(sc, m, "scenario"), m)
       d <- if (neutral && is_count(m)) s - b else get(sc, m, "diff")
@@ -759,47 +1010,53 @@ rows_table <- function(
   } else {
     # several scenarios, one metric: Baseline once, then Scenario / Diff each
     m <- metrics
-    b <- NULL
-    for (sc in sel$scenarios) {
-      x <- get(sc, m, "baseline")
-      b <- if (is.null(b)) x else ifelse(is.na(b), x, b)
-    }
-    b <- fill_zero(b, m)
-    with_pct <- pct_total && is_count(m)
-    body$baseline <- fmt(b, m)
-    colors$baseline <- NA_character_
-    labels <- c(labels, "Baseline")
-    groups <- c(groups, NA)
-    if (with_pct) {
-      body$baseline_pct <- format_pct_of_total(b)
-      colors$baseline_pct <- NA_character_
-      labels <- c(labels, "% of Total")
+    if (m %in% fixed_metrics) {
+      # the same in every scenario: one Count column, no spanner needed
+      add_fixed(m)
+      groups <- NULL
+    } else {
+      b <- NULL
+      for (sc in sel$scenarios) {
+        x <- get(sc, m, "baseline")
+        b <- if (is.null(b)) x else ifelse(is.na(b), x, b)
+      }
+      b <- fill_zero(b, m)
+      with_pct <- pct_total && is_count(m)
+      body$baseline <- fmt(b, m)
+      colors$baseline <- NA_character_
+      labels <- c(labels, "Baseline")
       groups <- c(groups, NA)
-    }
-    for (k in seq_along(sel$scenarios)) {
-      sc <- sel$scenarios[k]
-      s <- fill_zero(get(sc, m, "scenario"), m)
-      d <- if (neutral && is_count(m)) s - b else get(sc, m, "diff")
-      new <- c()
-      if (responders) {
-        first <- sub[sub$scenario_name == sc & sub$metric == m, ]
-        body[[paste0("s", k, "_station")]] <- as.character(first$scenario_source_id[match(keys, first[[key]])])
-        colors[[paste0("s", k, "_station")]] <- NA_character_
-        new <- "Station"
-      }
-      body[[paste0("s", k, "_s")]] <- fmt(s, m)
-      colors[[paste0("s", k, "_s")]] <- NA_character_
-      new <- c(new, "Scenario")
       if (with_pct) {
-        body[[paste0("s", k, "_sp")]] <- format_pct_of_total(s)
-        colors[[paste0("s", k, "_sp")]] <- NA_character_
-        new <- c(new, "% of Total")
+        body$baseline_pct <- format_pct_of_total(b)
+        colors$baseline_pct <- NA_character_
+        labels <- c(labels, "% of Total")
+        groups <- c(groups, NA)
       }
-      body[[paste0("s", k, "_d")]] <- fmt(d, m, diff = TRUE)
-      colors[[paste0("s", k, "_d")]] <- diff_color(d, m)
-      new <- c(new, "Diff")
-      labels <- c(labels, new)
-      groups <- c(groups, rep(sc, length(new)))
+      for (k in seq_along(sel$scenarios)) {
+        sc <- sel$scenarios[k]
+        s <- fill_zero(get(sc, m, "scenario"), m)
+        d <- if (neutral && is_count(m)) s - b else get(sc, m, "diff")
+        new <- c()
+        if (responders) {
+          first <- sub[sub$scenario_name == sc & sub$metric == m, ]
+          body[[paste0("s", k, "_station")]] <- as.character(first$scenario_source_id[match(keys, first[[key]])])
+          colors[[paste0("s", k, "_station")]] <- NA_character_
+          new <- "Station"
+        }
+        body[[paste0("s", k, "_s")]] <- fmt(s, m)
+        colors[[paste0("s", k, "_s")]] <- NA_character_
+        new <- c(new, "Scenario")
+        if (with_pct) {
+          body[[paste0("s", k, "_sp")]] <- format_pct_of_total(s)
+          colors[[paste0("s", k, "_sp")]] <- NA_character_
+          new <- c(new, "% of Total")
+        }
+        body[[paste0("s", k, "_d")]] <- fmt(d, m, diff = TRUE)
+        colors[[paste0("s", k, "_d")]] <- diff_color(d, m)
+        new <- c(new, "Diff")
+        labels <- c(labels, new)
+        groups <- c(groups, rep(sc, length(new)))
+      }
     }
   }
 

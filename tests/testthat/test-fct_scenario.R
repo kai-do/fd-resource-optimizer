@@ -122,3 +122,75 @@ test_that("a plain stations column means one station per scenario", {
   expect_equal(out$scenario_name, c("Only 1", "Only 7"))
   expect_equal(out$source_id, c(1L, 7L))
 })
+
+test_that("scenario_stub makes scenario names into folder names", {
+  expect_equal(
+    scenario_stub(c("R26->16 +R1", "+R1", "Baseline Rescues", "R11->16 +R27")),
+    c("R26_16_R1", "R1", "Baseline_Rescues", "R11_16_R27")
+  )
+})
+
+test_that("als_summary_scenarios lists today's rescues, the rescues, then each engine set", {
+  out <- als_summary_scenarios(
+    baseline_rescues = c(26, 11),
+    rescue_stations = c(16, 11, 1),
+    current_engines = c(1, 2, 9),
+    p_median_open = list(c(1, 11, 16, 4), list(c(1, 11, 16, 5))),
+    extra = list("Call Volume" = c(8, 19)),
+    label = "COA 1"
+  )
+
+  expect_equal(
+    out$scenario_name,
+    c(
+      "Current Setup", "Baseline Rescues", "COA 1 Rescues", "COA 1 + Current ALS",
+      "COA 1 + P-median #1", "COA 1 + P-median #2", "COA 1 + Call Volume"
+    )
+  )
+  expect_equal(out$scenario_id, 1:7)
+  expect_equal(out$baseline, c(TRUE, rep(FALSE, 6)))
+  expect_equal(
+    out$stations,
+    list(c(1, 2, 9, 11, 26), c(11, 26), c(1, 11, 16), c(1, 2, 9, 11, 16), c(1, 4, 11, 16), c(1, 5, 11, 16), c(1, 8, 11, 16, 19))
+  )
+})
+
+test_that("als_summary_scenarios drops a missing extra and warns on engines at rescues", {
+  out <- als_summary_scenarios(c(11), c(1, 11), c(2), extra = NULL)
+  expect_equal(out$scenario_name, c("Current Setup", "Baseline Rescues", "Rescues Rescues", "Rescues + Current ALS"))
+
+  expect_warning(
+    als_summary_scenarios(c(11), c(1, 11), c(2), extra = list("Call Volume" = c(11, 8)), label = "COA 2"),
+    "COA 2 + Call Volume: engines at rescue stations add no location: 11",
+    fixed = TRUE
+  )
+  expect_error(als_summary_scenarios(c(11), c(1), c(2), extra = list(c(8))), "named list")
+})
+
+test_that("als_plan_codes joins the methods that found a plan and numbers p-medians by run card rank", {
+  methods <- list(
+    c("Greedy Moves", "Greedy Build-Up", "P-median #1"),
+    "P-median #2",
+    "P-median #3",
+    "Call Volume"
+  )
+  # optimizer #3 scores better than #2 on the run card
+  codes <- als_plan_codes(methods, c(100, 103, 102, 110))
+
+  expect_equal(codes, c("GM=GB=PM1", "PM3", "PM2", "CV"))
+  # code order is fixed whatever order the methods come in
+  expect_equal(als_plan_codes(list(c("P-median #4", "Greedy Build-Up")), 1), "GB=PM1")
+  expect_equal(als_plan_codes(list("Night Shift"), 1), "Night Shift")
+  expect_error(als_plan_codes(methods, 1:2), "one entry per plan")
+})
+
+test_that("als_scenario_names puts the method in parentheses after the rescue scenario", {
+  expect_equal(
+    als_scenario_names("R26->16 +R1", c("GM=GB=PM1", "CV")),
+    c(
+      "Baseline Rescues (CUR)", "Baseline Rescues", "R26->16 +R1", "R26->16 +R1 (CUR)",
+      "R26->16 +R1 (GM=GB=PM1)", "R26->16 +R1 (CV)"
+    )
+  )
+  expect_equal(als_scenario_names("+R1", character())[3:4], c("+R1", "+R1 (CUR)"))
+})

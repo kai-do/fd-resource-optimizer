@@ -193,8 +193,16 @@ test_that("territory_table shows one row per territory, colored better or worse"
 
 test_that("territory_table takes several metrics or several scenarios", {
   ft <- territory_table(compare_with(compare_by_territory), metrics = c("n_calls", "p90_minutes"), pct_total = TRUE)
-  expect_true(all(c("n_calls_bp", "p90_minutes_d") %in% names(body(ft))))
-  expect_equal(body(ft)$n_calls_d, c("0", "0", "0"))
+  # calls are the same on both sides: one count and its share, no diff
+  expect_equal(names(body(ft))[2:3], c("n_calls_v", "n_calls_vp"))
+  expect_false(any(c("n_calls_b", "n_calls_s", "n_calls_d") %in% names(body(ft))))
+  expect_equal(body(ft)$n_calls_v, c("2", "1", "1"))
+  expect_equal(body(ft)$n_calls_vp, c("50.0%", "25.0%", "25.0%"))
+  expect_true(all(c("Count", "% of Total", "Calls") %in% header_text(ft)))
+  expect_true("p90_minutes_d" %in% names(body(ft)))
+
+  calls_only <- territory_table(compare_with(compare_by_territory), scenario = c("No 1", "No 3"), metrics = "n_calls")
+  expect_named(body(calls_only), c("station_id", "n_calls_v"))
 
   ft <- territory_table(compare_with(compare_by_territory), scenario = c("No 1", "No 3"))
   expect_true(all(c("s1_d", "s2_d") %in% names(body(ft))))
@@ -400,33 +408,46 @@ test_that("save_table writes Word and PNG files", {
 make_solutions_df <- function() {
   tibble::tibble(
     rank = 1:2,
-    objective = c(300, 330),
+    objective = c(300, 330), # the optimizer's own totals: never shown
     added_stations = list(c(7, 4), c(4, 22)),
     move_from = list(c(1, 2), c(1, 2)),
-    move_to = list(7, 22),
-    diff_from_current = c(-60, -30),
-    pct_diff_from_current = c(-60 / 360 * 100, -30 / 360 * 100)
+    move_to = list(7, 22)
   )
 }
 
-test_that("p_median_solutions_table shows one row per solution with stations listed", {
-  ft <- p_median_solutions_table(make_solutions_df())
+# Run card scoring of the two solutions against today's engines (360 min):
+# #2 scores better on the run card than #1
+make_solutions_overall <- function() {
+  rows <- function(sc, total, p90, pct) {
+    data.frame(
+      filter_name = "All calls", due = 1, scenario_name = sc,
+      metric = c("total_minutes", "p90_minutes", "pct_within_8min"),
+      baseline = c(360, 9, 0.80),
+      scenario = c(total, p90, pct),
+      diff = c(total - 360, p90 - 9, pct - 0.80)
+    )
+  }
+  rbind(rows("P-median #1", 320, 8.5, 0.85), rows("P-median #2", 300, 8, 0.90))
+}
+
+test_that("p_median_solutions_table shows run card values, best first, after today's row", {
+  ft <- p_median_solutions_table(make_solutions_df(), make_solutions_overall(), metrics = c("p90_minutes", "pct_within_8min"))
   b <- body(ft)
 
-  expect_equal(b$rank, c("#1", "#2"))
-  expect_equal(b$added, c("4, 7", "4, 22"))
-  expect_equal(b$move_from, c("1, 2", "1, 2"))
-  expect_equal(b$move_to, c("7", "22"))
-  expect_equal(b$total, c("300", "330"))
-  expect_equal(b$pct, c("-16.7%", "-8.3%"))
-  expect_match(paste(ft$footer$dataset[[1]], collapse = " "), "cheapest open station")
+  expect_equal(b$rank, c("Today's engines", "#2", "#1"))
+  expect_equal(b$added, c("", "4, 22", "4, 7"))
+  expect_equal(b$move_to, c("", "22", "7"))
+  expect_equal(b$total, c("360", "300", "320")) # run card, not the objective (300, 330)
+  expect_equal(b$diff, c("", "-60", "-40"))
+  expect_equal(b$pct, c("", "-16.7%", "-11.1%"))
+  expect_equal(b$pct_within_8min, c("80.0%", "90.0% (+10.0 pts)", "85.0% (+5.0 pts)"))
+  footer <- paste(ft$footer$dataset[[1]], collapse = " ")
+  expect_match(footer, "CAD run card order")
+  expect_no_match(footer, "cheapest open station")
 })
 
-test_that("p_median_solutions_table shows minutes per year when given years", {
-  ft <- p_median_solutions_table(make_solutions_df(), years = 3)
-  b <- body(ft)
-
-  expect_equal(b$total, c("100", "110"))
-  expect_equal(b$diff, c("-20", "-10"))
-  expect_match(paste(ft$footer$dataset[[1]], collapse = " "), "yearly averages over 3.0 years")
+test_that("p_median_solutions_table needs every solution's metrics", {
+  expect_error(
+    p_median_solutions_table(make_solutions_df(), make_solutions_overall(), metrics = "pct_within_10min")
+  )
 })

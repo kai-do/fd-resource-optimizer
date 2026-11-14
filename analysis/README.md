@@ -29,13 +29,14 @@ Data steps are slow and write the results the output steps read. Output steps on
 | 04 | `04-attach_fdz_to_matrix.R` | data | `incident_travel_matrix_fdz.parquet` |
 | 05 | `05-get_travel_stats.R` | data | `travel_stats.parquet` |
 | 06 | `06-get_runcard_stats.R` | data | `compare_*.parquet`, `paired_calls.parquet`, `scenarios.parquet`, `filter_years.parquet`, `scenario_comparison.xlsx` |
-| 07 | `07-compare_scenario_pairs.R` | data (~20 min) | `compare_pairs.parquet` |
-| 08 | `08-optimize_p_median.R` | data | `p_median_solutions.parquet` |
-| 09 | `09-score_als_placements.R` | data | `als/compare_*.parquet`, `als/scenarios.parquet`, `als/filter_years.parquet`, `als/als_scenario_comparison.xlsx` |
+| 07 | `07-compare_scenario_pairs.R` | data (a few min) | `compare_pairs.parquet` |
+| 08 | `08-optimize_p_median.R` | data | `als/<rescue scenario>/p_median_solutions.parquet`, for the top 3 rescue scenarios |
+| 09 | `09-score_als_placements.R` | data | in `als/<rescue scenario>/`: `compare_*.parquet`, `scenarios.parquet`, `filter_years.parquet`, `build_up_*.parquet`, `als_scenario_comparison.xlsx`; for the summary table, `summary/compare_*.parquet`, `summary/scenarios.parquet`, `summary/plans.parquet`, `summary/move_*.parquet`, `summary/als_summary_comparison.xlsx` |
 | 10 | `10-make_tables.R` | output | `tables/*.docx` |
 | 11 | `11-make_plots.R` | output | `plots/*.png` |
 | 12 | `12-make_maps.R` | output | `maps/*.png`, `maps/*.html` |
-| 13 | `13-make_als_tables.R` | output | `tables/als/*.docx` |
+| 13 | `13-make_als_tables.R` | output | `tables/als/<rescue scenario>/*.docx` |
+| 14 | `14-make_als_plots.R` | output | `plots/als/<rescue scenario>/moves_*.png` (engine transition charts) |
 
 Run them with `analysis/run_all.R`, from the repo root:
 
@@ -44,4 +45,4 @@ stage <- "outputs" # or "data", or "all" (the default)
 source("analysis/run_all.R")
 ```
 
-or `Rscript analysis/run_all.R outputs`. Set `steps <- c(10, 13)` instead to run particular steps.
+or `Rscript analysis/run_all.R outputs`. Set `steps <- c(10, 13, 14)` instead to run particular steps.

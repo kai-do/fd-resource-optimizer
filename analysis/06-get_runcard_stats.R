@@ -168,6 +168,13 @@ with_ci <- TRUE
 # Step 07's scenario-vs-scenario comparison uses the same method.
 ci_resample <- "call"
 ci_predict_years <- 1
+# 1000 resamples: between seeds the interval ends move under half a second
+# and under 0.1 percentage points, finer than the tables show
+ci_n_boot <- 1000
+# Worker processes for the bootstrap (~10 s to start). The intervals are the
+# same for any number; 1 runs it in this process. Up to the logical cores
+# (parallel::detectCores()) helps a little more.
+n_cores <- parallel::detectCores(logical = FALSE)
 
 # Stats -----------------------------------------------------------------------
 
@@ -193,10 +200,11 @@ comparison <- scenarios |>
     due = due_levels,
     thresholds = thresholds,
     ci = with_ci,
-    n_boot = 2000,
+    n_boot = ci_n_boot,
     resample = ci_resample, # or "zone": whole FDZs
     predict_years = ci_predict_years,
-    seed = 343
+    seed = 343,
+    n_cores = n_cores
   )
 
 # Checks ----------------------------------------------------------------------
